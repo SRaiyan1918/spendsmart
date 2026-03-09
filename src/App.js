@@ -86,6 +86,7 @@ export default function SpendSmart() {
   useEffect(() => {
     if (!loaded) return;
     persist(transactions, incomeCategories, expenseCategories, monthlyBudget);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [transactions, incomeCategories, expenseCategories, monthlyBudget, loaded]);
 
   // Computed
