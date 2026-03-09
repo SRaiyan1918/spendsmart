@@ -1,6 +1,6 @@
 {
-  "short_name": "React App",
-  "name": "Create React App Sample",
+  "short_name": "SpendSmart",
+  "name": "SpendSmart - Expense Tracker",
   "icons": [
     {
       "src": "favicon.ico",
@@ -20,6 +20,7 @@
   ],
   "start_url": ".",
   "display": "standalone",
-  "theme_color": "#000000",
-  "background_color": "#ffffff"
+  "theme_color": "#7C4DFF",
+  "background_color": "#0A0A0A",
+  "description": "Track your daily expenses and manage monthly budget smartly. Free, offline, no login required."
 }
