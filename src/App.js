@@ -17,7 +17,6 @@ import {
   onSnapshot,
   query,
   orderBy,
-  getDoc,
   setDoc,
 } from "firebase/firestore";
 
