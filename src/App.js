@@ -36,7 +36,22 @@ const sc = (e={}) => ({ backgroundColor:C.cards, borderRadius:12, padding:16, ma
 const sb = (bg, e={}) => ({ border:'none', borderRadius:8, cursor:'pointer', backgroundColor:bg, color:C.white, fontWeight:600, ...e });
 const si = (e={}) => ({ backgroundColor:C.dark, border:'1px solid #2a2a4a', borderRadius:8, padding:12, color:C.white, fontSize:14, outline:'none', width:'100%', boxSizing:'border-box', ...e });
 
-const fmt = n => `₹${parseFloat(n||0).toFixed(2)}`;
+const CURRENCIES = [
+  {code:'INR', symbol:'₹', name:'Indian Rupee'},
+  {code:'USD', symbol:'$', name:'US Dollar'},
+  {code:'EUR', symbol:'€', name:'Euro'},
+  {code:'GBP', symbol:'£', name:'British Pound'},
+  {code:'JPY', symbol:'¥', name:'Japanese Yen'},
+  {code:'AED', symbol:'د.إ', name:'UAE Dirham'},
+  {code:'SAR', symbol:'﷼', name:'Saudi Riyal'},
+  {code:'CAD', symbol:'C$', name:'Canadian Dollar'},
+  {code:'AUD', symbol:'A$', name:'Australian Dollar'},
+];
+const getCurrSymbol = (code) => CURRENCIES.find(c=>c.code===code)?.symbol || '₹';
+const fmt = (n, curr) => {
+  const sym = curr ? getCurrSymbol(curr) : '₹';
+  return sym + parseFloat(n||0).toFixed(2);
+};
 const getMonth = d => d?.slice(0,7)||'';
 const getYear  = d => d?.slice(0,4)||'';
 const getWeekKey = d => {
@@ -275,7 +290,16 @@ function AuthScreen() {
 function SpendSmart({user}) {
   const [screen,setScreen]=useState('dashboard');
   const [transactions,setTransactions]=useState([]);
-  const [settings,setSettings]=useState({monthlyBudget:10000,incomeCategories:DEF_IN,expenseCategories:DEF_EX,name:''});
+  const [settings,setSettings]=useState({monthlyBudget:10000,incomeCategories:DEF_IN,expenseCategories:DEF_EX,name:'',currency:'INR'});
+  const [recurringList,setRecurringList]=useState([]);
+  const [showRecurring,setShowRecurring]=useState(false);
+  const [showCurrency,setShowCurrency]=useState(false);
+  const [recType,setRecType]=useState('expense');
+  const [recAmount,setRecAmount]=useState('');
+  const [recCat,setRecCat]=useState('');
+  const [recNote,setRecNote]=useState('');
+  const [recFreq,setRecFreq]=useState('monthly');
+  const [recStartDate,setRecStartDate]=useState(new Date().toISOString().split('T')[0]);
   const [loaded,setLoaded]=useState(false);
   const [saveStatus,setSaveStatus]=useState('');
   const [showAdd,setShowAdd]=useState(false);
@@ -294,11 +318,21 @@ function SpendSmart({user}) {
   const [filterMonth,setFilterMonth]=useState(new Date().toISOString().slice(0,7));
   const [filterYear,setFilterYear]=useState(new Date().getFullYear().toString());
   const [graphPeriod,setGraphPeriod]=useState('monthly');
+  // Savings states
+  const [savingsGoals,setSavingsGoals]=useState([]);
+  const [showSavePrompt,setShowSavePrompt]=useState(false);
+  const [saveToGoalId,setSaveToGoalId]=useState('');
+  const [saveToGoalAmt,setSaveToGoalAmt]=useState('');
+  const [showSavingsModal,setShowSavingsModal]=useState(false);
+  const [newGoalTitle,setNewGoalTitle]=useState('');
+  const [newGoalTarget,setNewGoalTarget]=useState('');
+  const [newGoalEmoji,setNewGoalEmoji]=useState('🎯');
+  const [newGoalDeadline,setNewGoalDeadline]=useState('');
   const uid=user.uid;
 
   useEffect(()=>{
     const unsub=onSnapshot(doc(db,'users',uid),snap=>{
-      if(snap.exists()){const d=snap.data();setSettings({monthlyBudget:d.monthlyBudget||10000,incomeCategories:d.incomeCategories||DEF_IN,expenseCategories:d.expenseCategories||DEF_EX,name:d.name||''});setBudgetInput(String(d.monthlyBudget||10000));}
+      if(snap.exists()){const d=snap.data();setSettings({monthlyBudget:d.monthlyBudget||10000,incomeCategories:d.incomeCategories||DEF_IN,expenseCategories:d.expenseCategories||DEF_EX,name:d.name||'',currency:d.currency||'INR'});setBudgetInput(String(d.monthlyBudget||10000));}
     });return unsub;
   },[uid]);
 
@@ -308,16 +342,82 @@ function SpendSmart({user}) {
     return unsub;
   },[uid]);
 
+  useEffect(()=>{
+    const q=query(collection(db,'users',uid,'recurring'),orderBy('createdAt','desc'));
+    const unsub=onSnapshot(q,snap=>{setRecurringList(snap.docs.map(d=>({id:d.id,...d.data()})));});
+    return unsub;
+  },[uid]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(()=>{
+    const q=query(collection(db,'users',uid,'savings'),orderBy('createdAt','desc'));
+    const unsub=onSnapshot(q,snap=>{setSavingsGoals(snap.docs.map(d=>({id:d.id,...d.data()})));});
+    return unsub;
+  },[uid]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(()=>{
+    if(recurringList.length===0||transactions.length===0) return;
+    const today=new Date().toISOString().split('T')[0];
+    recurringList.forEach(async(rec)=>{
+      const lastAdded=rec.lastAdded||rec.startDate;
+      const last=new Date(lastAdded);
+      const now=new Date(today);
+      let shouldAdd=false;
+      if(rec.freq==='weekly'&&(now-last)>=(7*24*60*60*1000)) shouldAdd=true;
+      else if(rec.freq==='monthly'&&(now.getMonth()!==last.getMonth()||now.getFullYear()!==last.getFullYear())) shouldAdd=true;
+      else if(rec.freq==='yearly'&&now.getFullYear()!==last.getFullYear()) shouldAdd=true;
+      if(shouldAdd){
+        await addDoc(collection(db,'users',uid,'transactions'),{type:rec.type,category:rec.category,amount:rec.amount,date:today,note:rec.note||'🔄 Recurring',createdAt:new Date().toISOString()});
+        await updateDoc(doc(db,'users',uid,'recurring',rec.id),{lastAdded:today});
+      }
+    });
+  },[recurringList]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const saveSet=async(upd)=>{setSaveStatus('saving');await setDoc(doc(db,'users',uid),upd,{merge:true});setSaveStatus('saved');setTimeout(()=>setSaveStatus(''),2000);};
+
+  const saveRecurring=async()=>{
+    if(!recAmount||!recCat){alert('Amount aur Category zaroori hai!');return;}
+    await addDoc(collection(db,'users',uid,'recurring'),{type:recType,category:recCat,amount:parseFloat(recAmount),note:recNote||'',freq:recFreq,startDate:recStartDate,lastAdded:recStartDate,createdAt:new Date().toISOString()});
+    setRecAmount('');setRecCat('');setRecNote('');setRecFreq('monthly');setRecType('expense');
+    setRecStartDate(new Date().toISOString().split('T')[0]);
+    setShowRecurring(false);
+  };
+  const deleteRecurring=async id=>{if(window.confirm('Ye recurring transaction delete karna chahte ho?'))await deleteDoc(doc(db,'users',uid,'recurring',id));};
 
   const handleSaveTx=async()=>{
     if(!amount||!selCat){alert('Amount aur Category zaroori hai!');return;}
     setSaveStatus('saving');
     const data={type:txType,category:selCat,amount:parseFloat(amount),date:selDate,note:note||''};
-    if(editingTx) await updateDoc(doc(db,'users',uid,'transactions',editingTx.id),data);
-    else await addDoc(collection(db,'users',uid,'transactions'),{...data,createdAt:new Date().toISOString()});
+    if(editingTx) {
+      await updateDoc(doc(db,'users',uid,'transactions',editingTx.id),data);
+    } else {
+      await addDoc(collection(db,'users',uid,'transactions'),{...data,createdAt:new Date().toISOString()});
+      if(txType==='income'&&savingsGoals.filter(g=>(g.savedAmount||0)<g.targetAmount).length>0){
+        setSaveToGoalAmt(String(parseFloat(amount)));
+        setSaveToGoalId('');
+        closeModal();
+        setSaveStatus('saved');setTimeout(()=>setSaveStatus(''),2000);
+        setShowSavePrompt(true);
+        return;
+      }
+    }
     setSaveStatus('saved');setTimeout(()=>setSaveStatus(''),2000);closeModal();
   };
+
+  const allocateToGoal=async()=>{
+    if(!saveToGoalId||!saveToGoalAmt){alert('Goal aur amount zaroori hai!');return;}
+    const goal=savingsGoals.find(g=>g.id===saveToGoalId);
+    if(!goal)return;
+    const newSaved=(goal.savedAmount||0)+parseFloat(saveToGoalAmt);
+    await updateDoc(doc(db,'users',uid,'savings',saveToGoalId),{savedAmount:newSaved});
+    setShowSavePrompt(false);setSaveToGoalId('');setSaveToGoalAmt('');
+  };
+
+  const createGoal=async()=>{
+    if(!newGoalTitle||!newGoalTarget){alert('Title aur Target zaroori hai!');return;}
+    await addDoc(collection(db,'users',uid,'savings'),{title:newGoalTitle,targetAmount:parseFloat(newGoalTarget),savedAmount:0,emoji:newGoalEmoji,deadline:newGoalDeadline||'',createdAt:new Date().toISOString()});
+    setNewGoalTitle('');setNewGoalTarget('');setNewGoalEmoji('🎯');setNewGoalDeadline('');setShowSavingsModal(false);
+  };
+
+  const deleteGoal=async id=>{if(window.confirm('Goal delete karna chahte ho?'))await deleteDoc(doc(db,'users',uid,'savings',id));};
 
   const openEdit=tx=>{setEditingTx(tx);setTxType(tx.type);setAmount(String(tx.amount));setNote(tx.note||'');setSelCat(tx.category);setSelDate(tx.date);setShowAdd(true);};
   const closeModal=()=>{setShowAdd(false);setEditingTx(null);setAmount('');setNote('');setSelCat('');setNewCat('');setTxType('expense');setSelDate(new Date().toISOString().split('T')[0]);};
@@ -335,7 +435,8 @@ function SpendSmart({user}) {
   const balance=totalIncome-totalExpense;
   const curMonth=new Date().toISOString().slice(0,7);
   const monthlySpend=transactions.filter(t=>t.type==='expense'&&t.date?.startsWith(curMonth)).reduce((s,t)=>s+t.amount,0);
-  const {monthlyBudget,incomeCategories,expenseCategories,name}=settings;
+  const {monthlyBudget,incomeCategories,expenseCategories,name,currency}=settings;
+  const fmtC=(n)=>fmt(n,currency);
   const budgetPct=monthlyBudget>0?(monthlySpend/monthlyBudget)*100:0;
   const budgetWarn=budgetPct>=80;
   const progColor=budgetPct>100?C.red:budgetPct>80?C.orange:C.green;
@@ -385,10 +486,12 @@ function SpendSmart({user}) {
           <div style={{fontSize:19,fontWeight:'bold'}}>💸 SpendSmart</div>
           {name&&<div style={{fontSize:11,color:C.grey}}>👋 {name}</div>}
         </div>
-        <div style={{display:'flex',alignItems:'center',gap:8}}>
+        <div style={{display:'flex',alignItems:'center',gap:6}}>
           {saveStatus==='saving'&&<span style={{fontSize:11,color:C.grey}}>🔄</span>}
           {saveStatus==='saved'&&<span style={{fontSize:11,color:C.green}}>✅</span>}
-          <button onClick={()=>signOut(auth)} style={sb('#FF174420',{padding:'6px 10px',borderRadius:6,fontSize:12,color:C.red,border:'1px solid #FF174444'})}>🚪 Logout</button>
+          <button onClick={()=>setShowCurrency(true)} style={sb('#7C4DFF22',{padding:'6px 8px',borderRadius:6,fontSize:11,color:C.purple,border:'1px solid #7C4DFF44'})}>{getCurrSymbol(currency)} {currency}</button>
+          <button onClick={()=>setShowRecurring(true)} style={sb('#FFA50022',{padding:'6px 8px',borderRadius:6,fontSize:11,color:C.orange,border:'1px solid #FFA50044'})}>🔄</button>
+          <button onClick={()=>signOut(auth)} style={sb('#FF174420',{padding:'6px 8px',borderRadius:6,fontSize:12,color:C.red,border:'1px solid #FF174444'})}>🚪</button>
         </div>
       </div>
 
@@ -412,12 +515,43 @@ function SpendSmart({user}) {
               <div key={t.id} style={sc({display:'flex',justifyContent:'space-between',alignItems:'center',padding:11})}>
                 <div style={{flex:1}}><div style={{fontSize:13,fontWeight:600}}>{t.category}</div><div style={{fontSize:11,color:C.grey}}>{t.date}{t.note?` • ${t.note}`:''}</div></div>
                 <div style={{display:'flex',alignItems:'center',gap:8}}>
-                  <div style={{fontWeight:'bold',fontSize:13,color:t.type==='income'?C.green:C.red}}>{t.type==='income'?'+':'-'}{fmt(t.amount)}</div>
+                  <div style={{fontWeight:'bold',fontSize:13,color:t.type==='income'?C.green:C.red}}>{t.type==='income'?'+':'-'}{fmtC(t.amount)}</div>
                   <button onClick={()=>openEdit(t)} style={{background:'none',border:'none',cursor:'pointer',fontSize:14}}>✏️</button>
                 </div>
               </div>
             ))
           }
+
+          {/* SAVINGS GOALS */}
+          <div style={{marginTop:16}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+              <div style={{fontSize:15,fontWeight:600}}>🏦 Savings Goals</div>
+              <button onClick={()=>setShowSavingsModal(true)} style={sb(C.purple,{padding:'5px 12px',fontSize:11,borderRadius:20})}>+ New Goal</button>
+            </div>
+            {savingsGoals.length===0
+              ?<button onClick={()=>setShowSavingsModal(true)} style={sb(C.dark,{width:'100%',padding:12,border:`1px dashed ${C.purple}`,color:C.purple,fontSize:13,borderRadius:10})}>🎯 Pehla Goal Banao</button>
+              :savingsGoals.map(g=>{
+                const pct=g.targetAmount>0?Math.min((g.savedAmount||0)/g.targetAmount*100,100):0;
+                const done=pct>=100;
+                return(
+                  <div key={g.id} style={sc({borderLeft:`4px solid ${done?C.green:C.purple}`,padding:12})}>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+                      <div style={{fontSize:14,fontWeight:600}}>{g.emoji} {g.title} {done&&'✅'}</div>
+                      <button onClick={()=>deleteGoal(g.id)} style={{background:'none',border:'none',cursor:'pointer',fontSize:13}}>🗑️</button>
+                    </div>
+                    <div style={{height:8,backgroundColor:'#111',borderRadius:4,overflow:'hidden',marginBottom:6}}>
+                      <div style={{height:'100%',width:`${pct}%`,backgroundColor:done?C.green:C.purple,borderRadius:4,transition:'width 0.5s'}}/>
+                    </div>
+                    <div style={{display:'flex',justifyContent:'space-between'}}>
+                      <span style={{fontSize:11,color:C.grey}}>{fmtC(g.savedAmount||0)} / {fmtC(g.targetAmount)}</span>
+                      <span style={{fontSize:11,color:done?C.green:C.purple,fontWeight:'bold'}}>{pct.toFixed(0)}%</span>
+                    </div>
+                    {g.deadline&&<div style={{fontSize:10,color:C.grey,marginTop:3}}>📅 {g.deadline}</div>}
+                  </div>
+                );
+              })
+            }
+          </div>
         </>}
 
         {/* HISTORY */}
@@ -450,7 +584,7 @@ function SpendSmart({user}) {
               <div key={t.id} style={sc({display:'flex',justifyContent:'space-between',alignItems:'center',padding:11})}>
                 <div style={{flex:1}}><div style={{fontSize:13,fontWeight:600}}>{t.category}</div><div style={{fontSize:11,color:C.grey}}>{t.date}{t.note?` • ${t.note}`:''}</div></div>
                 <div style={{display:'flex',alignItems:'center',gap:6}}>
-                  <div style={{fontWeight:'bold',fontSize:13,color:t.type==='income'?C.green:C.red}}>{t.type==='income'?'+':'-'}{fmt(t.amount)}</div>
+                  <div style={{fontWeight:'bold',fontSize:13,color:t.type==='income'?C.green:C.red}}>{t.type==='income'?'+':'-'}{fmtC(t.amount)}</div>
                   <button onClick={()=>openEdit(t)} style={{background:'none',border:'none',cursor:'pointer',fontSize:14}}>✏️</button>
                   <button onClick={()=>deleteTx(t.id)} style={{background:'none',border:'none',cursor:'pointer',fontSize:14}}>🗑️</button>
                 </div>
@@ -569,6 +703,134 @@ function SpendSmart({user}) {
               <button onClick={()=>setShowBudget(false)} style={sb(C.grey,{flex:1,padding:11})}>Cancel</button>
               <button onClick={()=>{saveSet({monthlyBudget:parseFloat(budgetInput)||10000});setShowBudget(false);}} style={sb(C.purple,{flex:1,padding:11})}>Save</button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* SAVE TO GOAL PROMPT */}
+      {showSavePrompt&&(
+        <div style={{position:'fixed',inset:0,backgroundColor:'rgba(0,0,0,0.88)',zIndex:100,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
+          <div style={sc({width:'100%',maxWidth:340,marginBottom:0,padding:20})}>
+            <div style={{fontSize:22,textAlign:'center',marginBottom:6}}>🏦</div>
+            <div style={{fontSize:17,fontWeight:'bold',marginBottom:4,textAlign:'center'}}>Savings mein daalna hai?</div>
+            <div style={{fontSize:12,color:C.grey,marginBottom:16,textAlign:'center'}}>Is income ka kuch hissa goal mein allocate karo</div>
+            <div style={{marginBottom:12}}>
+              <div style={{fontSize:12,color:C.grey,marginBottom:5}}>Goal Choose Karo *</div>
+              <select value={saveToGoalId} onChange={e=>setSaveToGoalId(e.target.value)} style={si()}>
+                <option value="">-- Goal chunno --</option>
+                {savingsGoals.filter(g=>(g.savedAmount||0)<g.targetAmount).map(g=>(
+                  <option key={g.id} value={g.id}>{g.emoji} {g.title} ({fmtC(g.targetAmount-(g.savedAmount||0))} baki)</option>
+                ))}
+              </select>
+            </div>
+            <div style={{marginBottom:16}}>
+              <div style={{fontSize:12,color:C.grey,marginBottom:5}}>Amount *</div>
+              <input type="number" value={saveToGoalAmt} onChange={e=>setSaveToGoalAmt(e.target.value)} style={si({fontSize:18,fontWeight:'bold',textAlign:'center'})}/>
+            </div>
+            <div style={{display:'flex',gap:10}}>
+              <button onClick={()=>setShowSavePrompt(false)} style={sb(C.grey,{flex:1,padding:11,fontSize:13})}>⏭️ Skip</button>
+              <button onClick={allocateToGoal} style={sb(C.purple,{flex:1,padding:11,fontSize:13})}>💾 Save to Goal</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CREATE GOAL MODAL */}
+      {showSavingsModal&&(
+        <div style={{position:'fixed',inset:0,backgroundColor:'rgba(0,0,0,0.9)',zIndex:100,display:'flex',alignItems:'flex-end',justifyContent:'center'}}>
+          <div style={{backgroundColor:C.bg,width:'100%',maxWidth:480,borderRadius:'16px 16px 0 0',maxHeight:'92vh',overflowY:'auto',padding:16}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+              <span style={{fontSize:17,fontWeight:'bold'}}>🏦 Naya Goal Banao</span>
+              <button onClick={()=>setShowSavingsModal(false)} style={{background:'none',border:'none',color:C.white,fontSize:22,cursor:'pointer'}}>✕</button>
+            </div>
+            <div style={{marginBottom:12}}>
+              <div style={{fontSize:12,color:C.grey,marginBottom:8}}>Emoji Chunno</div>
+              <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                {['🎯','📱','🚗','🏠','✈️','💻','👗','💍','🎮','📚','🏖️','💪'].map(em=>(
+                  <button key={em} onClick={()=>setNewGoalEmoji(em)} style={sb(newGoalEmoji===em?C.purple:C.cards,{padding:'6px 10px',borderRadius:8,fontSize:18,border:newGoalEmoji===em?`2px solid ${C.purple}`:'2px solid transparent'})}>{em}</button>
+                ))}
+              </div>
+            </div>
+            <div style={{marginBottom:12}}><div style={{fontSize:12,color:C.grey,marginBottom:5}}>Goal Title *</div><input placeholder="Jaise: New Phone" value={newGoalTitle} onChange={e=>setNewGoalTitle(e.target.value)} style={si()}/></div>
+            <div style={{marginBottom:12}}><div style={{fontSize:12,color:C.grey,marginBottom:5}}>Target Amount *</div><input type="number" placeholder="50000" value={newGoalTarget} onChange={e=>setNewGoalTarget(e.target.value)} style={si({fontSize:18,fontWeight:'bold',textAlign:'center'})}/></div>
+            <div style={{marginBottom:16}}><div style={{fontSize:12,color:C.grey,marginBottom:5}}>Deadline (Optional)</div><input type="date" value={newGoalDeadline} onChange={e=>setNewGoalDeadline(e.target.value)} style={si({colorScheme:'dark'})}/></div>
+            <button onClick={createGoal} style={sb(C.purple,{width:'100%',padding:13,fontSize:14,marginBottom:14})}>🏦 Goal Save Karo</button>
+          </div>
+        </div>
+      )}
+
+      {/* CURRENCY MODAL */}
+      {showCurrency&&(
+        <div style={{position:'fixed',inset:0,backgroundColor:'rgba(0,0,0,0.85)',zIndex:100,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
+          <div style={sc({width:'100%',maxWidth:360,marginBottom:0,padding:20})}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+              <span style={{fontSize:17,fontWeight:'bold'}}>💱 Currency Chunno</span>
+              <button onClick={()=>setShowCurrency(false)} style={{background:'none',border:'none',color:C.white,fontSize:22,cursor:'pointer'}}>✕</button>
+            </div>
+            <div style={{display:'flex',flexDirection:'column',gap:8}}>
+              {CURRENCIES.map(cur=>(
+                <button key={cur.code} onClick={()=>{saveSet({currency:cur.code});setShowCurrency(false);}}
+                  style={sb(currency===cur.code?C.purple:C.dark,{padding:'12px 14px',textAlign:'left',display:'flex',justifyContent:'space-between',alignItems:'center',border:currency===cur.code?`2px solid ${C.purple}`:'2px solid #2a2a4a',borderRadius:10})}>
+                  <span style={{fontSize:13}}>{cur.symbol} {cur.name}</span>
+                  <span style={{fontSize:12,color:currency===cur.code?C.white:C.grey}}>{cur.code} {currency===cur.code?'✓':''}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* RECURRING MODAL */}
+      {showRecurring&&(
+        <div style={{position:'fixed',inset:0,backgroundColor:'rgba(0,0,0,0.9)',zIndex:100,display:'flex',alignItems:'flex-end',justifyContent:'center'}}>
+          <div style={{backgroundColor:C.bg,width:'100%',maxWidth:480,borderRadius:'16px 16px 0 0',maxHeight:'92vh',overflowY:'auto',padding:16}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+              <span style={{fontSize:17,fontWeight:'bold'}}>🔄 Recurring Transactions</span>
+              <button onClick={()=>setShowRecurring(false)} style={{background:'none',border:'none',color:C.white,fontSize:22,cursor:'pointer'}}>✕</button>
+            </div>
+
+            {/* Existing recurring list */}
+            {recurringList.length>0&&(
+              <div style={{marginBottom:16}}>
+                <div style={{fontSize:13,fontWeight:600,color:C.grey,marginBottom:8}}>Active Recurring</div>
+                {recurringList.map(rec=>(
+                  <div key={rec.id} style={sc({display:'flex',justifyContent:'space-between',alignItems:'center',padding:11,marginBottom:8,borderLeft:`4px solid ${rec.type==='income'?C.green:C.orange}`})}>
+                    <div style={{flex:1}}>
+                      <div style={{fontSize:13,fontWeight:600}}>{rec.category} — {fmtC(rec.amount)}</div>
+                      <div style={{fontSize:11,color:C.grey}}>{rec.freq} • {rec.note||''}</div>
+                    </div>
+                    <button onClick={()=>deleteRecurring(rec.id)} style={{background:'none',border:'none',cursor:'pointer',fontSize:16}}>🗑️</button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Add new recurring */}
+            <div style={{fontSize:13,fontWeight:600,color:C.grey,marginBottom:10}}>Naya Recurring Add Karo</div>
+            <div style={{display:'flex',gap:10,marginBottom:12}}>
+              <button onClick={()=>{setRecType('income');setRecCat('');}} style={sb(recType==='income'?C.green:C.cards,{flex:1,padding:10,fontSize:13})}>📈 Income</button>
+              <button onClick={()=>{setRecType('expense');setRecCat('');}} style={sb(recType==='expense'?C.red:C.cards,{flex:1,padding:10,fontSize:13})}>📉 Expense</button>
+            </div>
+            <div style={{marginBottom:11}}><div style={{fontSize:12,color:C.grey,marginBottom:5}}>Amount *</div><input type="number" placeholder="0.00" value={recAmount} onChange={e=>setRecAmount(e.target.value)} style={si({fontSize:20,fontWeight:'bold',textAlign:'center'})}/></div>
+            <div style={{marginBottom:11}}>
+              <div style={{fontSize:12,color:C.grey,marginBottom:5}}>Category *</div>
+              <div style={{display:'flex',gap:6,overflowX:'auto',paddingBottom:4}}>
+                {(recType==='income'?incomeCategories:expenseCategories).map(c=>(
+                  <button key={c} onClick={()=>setRecCat(c)} style={sb(recCat===c?C.purple:C.cards,{padding:'6px 12px',borderRadius:20,fontSize:12,whiteSpace:'nowrap',border:recCat===c?`2px solid ${C.purple}`:'2px solid transparent'})}>{c}</button>
+                ))}
+              </div>
+            </div>
+            <div style={{marginBottom:11}}>
+              <div style={{fontSize:12,color:C.grey,marginBottom:5}}>Frequency (Kitni baar?)</div>
+              <div style={{display:'flex',gap:8}}>
+                {[['weekly','Weekly'],['monthly','Monthly'],['yearly','Yearly']].map(([f,lb])=>(
+                  <button key={f} onClick={()=>setRecFreq(f)} style={sb(recFreq===f?C.orange:C.cards,{flex:1,padding:9,fontSize:12,borderRadius:8})}>{lb}</button>
+                ))}
+              </div>
+            </div>
+            <div style={{marginBottom:11}}><div style={{fontSize:12,color:C.grey,marginBottom:5}}>Note</div><input placeholder="Jaise: Monthly rent" value={recNote} onChange={e=>setRecNote(e.target.value)} style={si()}/></div>
+            <div style={{marginBottom:14}}><div style={{fontSize:12,color:C.grey,marginBottom:5}}>Start Date</div><input type="date" value={recStartDate} onChange={e=>setRecStartDate(e.target.value)} style={si({colorScheme:'dark'})}/></div>
+            <button onClick={saveRecurring} style={sb(C.orange,{width:'100%',padding:13,fontSize:14,marginBottom:14})}>🔄 Recurring Save Karo</button>
           </div>
         </div>
       )}
