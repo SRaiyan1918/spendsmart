@@ -1,26 +1,15 @@
 import { useState, useEffect } from "react";
 import { initializeApp } from "firebase/app";
 import {
-  getAuth,
-  createUserWithEmailAndPassword,
-  signInWithEmailAndPassword,
-  signOut,
-  onAuthStateChanged,
+  getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword,
+  signOut, onAuthStateChanged, sendPasswordResetEmail,
+  GoogleAuthProvider, signInWithPopup,
 } from "firebase/auth";
 import {
-  getFirestore,
-  collection,
-  addDoc,
-  updateDoc,
-  deleteDoc,
-  doc,
-  onSnapshot,
-  query,
-  orderBy,
-  setDoc,
+  getFirestore, collection, addDoc, updateDoc, deleteDoc,
+  doc, onSnapshot, query, orderBy, setDoc, getDoc,
 } from "firebase/firestore";
 
-// ─── Firebase Config ──────────────────────────────────────────────────────────
 const firebaseConfig = {
   apiKey: "AIzaSyD2d1xHmkhJbFzCAf_3UKGeVTdkCkPGk54",
   authDomain: "spend-smart-eb084.firebaseapp.com",
@@ -28,348 +17,388 @@ const firebaseConfig = {
   storageBucket: "spend-smart-eb084.firebasestorage.app",
   messagingSenderId: "291802030949",
   appId: "1:291802030949:web:f06326beaaffeb2672778c",
-  measurementId: "G-3MRWHZ3JCF",
 };
-
 const firebaseApp = initializeApp(firebaseConfig);
 const auth = getAuth(firebaseApp);
 const db = getFirestore(firebaseApp);
+const googleProvider = new GoogleAuthProvider();
 
-// ─── Constants ────────────────────────────────────────────────────────────────
 const C = {
-  bg: '#0A0A0A', cards: '#1A1A2E', purple: '#7C4DFF',
-  green: '#00C853', red: '#FF1744', white: '#FFFFFF', grey: '#888888',
+  bg:'#0A0A0A', cards:'#1A1A2E', purple:'#7C4DFF',
+  green:'#00C853', red:'#FF1744', white:'#FFFFFF',
+  grey:'#888888', orange:'#FFA500', dark:'#0F0F1A',
 };
 const DEF_IN = ['Salary','Freelance','Business','Investment','Other'];
 const DEF_EX = ['Food','Transport','Entertainment','Utilities','Shopping','Health','Other'];
+const CAT_CLR = ['#7C4DFF','#00C853','#FF1744','#FFA500','#00BCD4','#E91E63','#FF5722','#4CAF50','#2196F3','#9C27B0'];
 
-// ─── Reusable styles ──────────────────────────────────────────────────────────
-const s = {
-  card: (extra={}) => ({ backgroundColor: C.cards, borderRadius: 12, padding: 16, marginBottom: 12, ...extra }),
-  btn: (bg, extra={}) => ({ border: 'none', borderRadius: 8, cursor: 'pointer', backgroundColor: bg, color: C.white, fontWeight: 600, ...extra }),
-  input: (extra={}) => ({ backgroundColor: C.cards, border: 'none', borderRadius: 8, padding: 12, color: C.white, fontSize: 14, outline: 'none', width: '100%', boxSizing: 'border-box', ...extra }),
+const sc = (e={}) => ({ backgroundColor:C.cards, borderRadius:12, padding:16, marginBottom:12, ...e });
+const sb = (bg, e={}) => ({ border:'none', borderRadius:8, cursor:'pointer', backgroundColor:bg, color:C.white, fontWeight:600, ...e });
+const si = (e={}) => ({ backgroundColor:C.dark, border:'1px solid #2a2a4a', borderRadius:8, padding:12, color:C.white, fontSize:14, outline:'none', width:'100%', boxSizing:'border-box', ...e });
+
+const fmt = n => `₹${parseFloat(n||0).toFixed(2)}`;
+const getMonth = d => d?.slice(0,7)||'';
+const getYear  = d => d?.slice(0,4)||'';
+const getWeekKey = d => {
+  const dt = new Date(d), day = dt.getDay();
+  const mon = new Date(dt); mon.setDate(dt.getDate()-(day===0?6:day-1));
+  return mon.toISOString().slice(0,10);
 };
 
-// ─── Main App ─────────────────────────────────────────────────────────────────
-export default function App() {
-  const [user, setUser] = useState(null);
-  const [authLoading, setAuthLoading] = useState(true);
-
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      setAuthLoading(false);
-    });
-    return unsub;
-  }, []);
-
-  if (authLoading) return <Loader text="Loading..." />;
-  return user ? <SpendSmart user={user} /> : <AuthScreen />;
+function generatePDF(transactions, userName) {
+  const win = window.open('','_blank');
+  const inc = transactions.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0);
+  const exp = transactions.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0);
+  const rows = transactions.map(t=>`<tr>
+    <td>${t.date}</td><td>${t.type==='income'?'📈 Income':'📉 Expense'}</td>
+    <td>${t.category}</td><td>${t.note||'-'}</td>
+    <td style="color:${t.type==='income'?'#00C853':'#FF1744'};font-weight:bold">${t.type==='income'?'+':'-'}₹${parseFloat(t.amount).toFixed(2)}</td>
+  </tr>`).join('');
+  win.document.write(`<!DOCTYPE html><html><head><title>SpendSmart Report</title>
+  <style>body{font-family:Arial,sans-serif;padding:30px}h1{color:#7C4DFF}
+  .sum{display:flex;gap:16px;margin:16px 0}.sc{background:#f5f5f5;border-radius:8px;padding:14px;flex:1;text-align:center}
+  .sl{font-size:11px;color:#888;margin-bottom:4px}.sv{font-size:20px;font-weight:bold}
+  table{width:100%;border-collapse:collapse;font-size:12px}th{background:#7C4DFF;color:#fff;padding:9px 7px;text-align:left}
+  td{padding:8px 7px;border-bottom:1px solid #eee}tr:nth-child(even){background:#fafafa}
+  @media print{body{padding:10px}}</style></head><body>
+  <h1>💸 SpendSmart</h1>
+  <p style="color:#888;font-size:12px">Report — ${userName} — ${new Date().toLocaleDateString('en-IN')}</p>
+  <div class="sum">
+    <div class="sc"><div class="sl">Total Income</div><div class="sv" style="color:#00C853">+₹${inc.toFixed(2)}</div></div>
+    <div class="sc"><div class="sl">Total Expense</div><div class="sv" style="color:#FF1744">-₹${exp.toFixed(2)}</div></div>
+    <div class="sc"><div class="sl">Net Balance</div><div class="sv" style="color:${inc-exp>=0?'#00C853':'#FF1744'}">₹${(inc-exp).toFixed(2)}</div></div>
+  </div>
+  <table><thead><tr><th>Date</th><th>Type</th><th>Category</th><th>Note</th><th>Amount</th></tr></thead>
+  <tbody>${rows}</tbody></table>
+  <script>window.onload=()=>window.print()<\/script></body></html>`);
+  win.document.close();
 }
 
-// ─── Loader ───────────────────────────────────────────────────────────────────
-function Loader({ text }) {
+function BarGraph({ data, title }) {
+  if (!data||data.length===0) return <div style={{...sc({padding:20,textAlign:'center'})}}>
+    <span style={{color:C.grey,fontSize:13}}>Is period mein koi data nahi</span></div>;
+  const max = Math.max(...data.map(d=>d.income+d.expense),1);
   return (
-    <div style={{ backgroundColor: C.bg, minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 12 }}>
-      <div style={{ fontSize: 48 }}>💸</div>
-      <div style={{ color: C.purple, fontSize: 22, fontWeight: 'bold' }}>SpendSmart</div>
-      <div style={{ color: C.grey, fontSize: 13 }}>{text}</div>
+    <div style={sc()}>
+      <div style={{fontSize:14,fontWeight:600,marginBottom:12}}>{title}</div>
+      <div style={{display:'flex',alignItems:'flex-end',gap:4,height:130,overflowX:'auto',paddingBottom:4}}>
+        {data.map((d,i)=>(
+          <div key={i} style={{display:'flex',flexDirection:'column',alignItems:'center',minWidth:32,flex:1}}>
+            <div style={{display:'flex',gap:2,alignItems:'flex-end',height:100}}>
+              <div style={{width:13,backgroundColor:C.green,borderRadius:'3px 3px 0 0',height:`${(d.income/max)*100}%`,minHeight:d.income>0?2:0}} />
+              <div style={{width:13,backgroundColor:C.red,borderRadius:'3px 3px 0 0',height:`${(d.expense/max)*100}%`,minHeight:d.expense>0?2:0}} />
+            </div>
+            <div style={{fontSize:9,color:C.grey,marginTop:4,textAlign:'center',maxWidth:32,overflow:'hidden',whiteSpace:'nowrap'}}>{d.label}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{display:'flex',gap:14,marginTop:8}}>
+        <div style={{display:'flex',alignItems:'center',gap:5}}><div style={{width:10,height:10,backgroundColor:C.green,borderRadius:2}}/><span style={{fontSize:11,color:C.grey}}>Income</span></div>
+        <div style={{display:'flex',alignItems:'center',gap:5}}><div style={{width:10,height:10,backgroundColor:C.red,borderRadius:2}}/><span style={{fontSize:11,color:C.grey}}>Expense</span></div>
+      </div>
     </div>
   );
 }
 
-// ─── Auth Screen ──────────────────────────────────────────────────────────────
-function AuthScreen() {
-  const [isLogin, setIsLogin] = useState(true);
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [name, setName] = useState('');
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
-
-  const handle = async () => {
-    if (!email || !password) { setError('Email aur Password zaroori hai!'); return; }
-    if (!isLogin && !name) { setError('Naam zaroori hai!'); return; }
-    setLoading(true); setError('');
-    try {
-      if (isLogin) {
-        await signInWithEmailAndPassword(auth, email, password);
-      } else {
-        const cred = await createUserWithEmailAndPassword(auth, email, password);
-        // Save user settings in Firestore
-        await setDoc(doc(db, 'users', cred.user.uid), {
-          name, email,
-          monthlyBudget: 10000,
-          incomeCategories: DEF_IN,
-          expenseCategories: DEF_EX,
-          createdAt: new Date().toISOString(),
-        });
-        // Migrate localStorage data if any
-        try {
-          const raw = localStorage.getItem('spendsmart_data');
-          if (raw) {
-            const old = JSON.parse(raw);
-            if (old.transactions && old.transactions.length > 0) {
-              for (const tx of old.transactions) {
-                await addDoc(collection(db, 'users', cred.user.uid, 'transactions'), tx);
-              }
-              localStorage.removeItem('spendsmart_data');
-            }
-          }
-        } catch (e) {}
-      }
-    } catch (e) {
-      const msgs = {
-        'auth/user-not-found': 'Email nahi mila!',
-        'auth/wrong-password': 'Password galat hai!',
-        'auth/email-already-in-use': 'Email already registered hai!',
-        'auth/weak-password': 'Password kam se kam 6 characters ka hona chahiye!',
-        'auth/invalid-email': 'Valid email daalo!',
-        'auth/invalid-credential': 'Email ya Password galat hai!',
-      };
-      setError(msgs[e.code] || e.message);
-      setLoading(false);
-    }
-  };
-
+function DonutChart({ data, title }) {
+  if (!data||data.length===0||data.every(d=>d.value===0)) return null;
+  const total = data.reduce((s,d)=>s+d.value,0);
+  let cum = 0;
+  const size=120,r=44,cx=60,cy=60;
+  const slices = data.filter(d=>d.value>0).map((d,i)=>{
+    const pct=d.value/total, start=cum*2*Math.PI-Math.PI/2;
+    cum+=pct;
+    const end=cum*2*Math.PI-Math.PI/2;
+    const x1=cx+r*Math.cos(start),y1=cy+r*Math.sin(start);
+    const x2=cx+r*Math.cos(end),y2=cy+r*Math.sin(end);
+    return {...d,path:`M${cx} ${cy}L${x1} ${y1}A${r} ${r} 0 ${pct>0.5?1:0} 1 ${x2} ${y2}Z`,color:CAT_CLR[i%CAT_CLR.length],pct:(pct*100).toFixed(1)};
+  });
   return (
-    <div style={{ backgroundColor: C.bg, minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: "'Segoe UI', sans-serif", padding: 20 }}>
-      <div style={{ width: '100%', maxWidth: 380 }}>
-        {/* Logo */}
-        <div style={{ textAlign: 'center', marginBottom: 36 }}>
-          <div style={{ fontSize: 56, marginBottom: 8 }}>💸</div>
-          <div style={{ fontSize: 28, fontWeight: 'bold', color: C.white }}>SpendSmart</div>
-          <div style={{ fontSize: 13, color: C.grey, marginTop: 4 }}>Apne paise ko smart banao</div>
-        </div>
-
-        {/* Card */}
-        <div style={{ ...s.card({ padding: 24 }) }}>
-          {/* Tabs */}
-          <div style={{ display: 'flex', backgroundColor: C.bg, borderRadius: 8, padding: 4, marginBottom: 24 }}>
-            {['Login','Sign Up'].map((t, i) => (
-              <button key={t} onClick={() => { setIsLogin(i === 0); setError(''); }}
-                style={{ ...s.btn(isLogin === (i===0) ? C.purple : 'transparent', { flex: 1, padding: '10px', borderRadius: 6, fontSize: 14 }) }}>
-                {t}
-              </button>
-            ))}
-          </div>
-
-          {/* Fields */}
-          {!isLogin && (
-            <div style={{ marginBottom: 14 }}>
-              <div style={{ fontSize: 12, color: C.grey, marginBottom: 6 }}>Aapka Naam</div>
-              <input placeholder="Jaise: Raiyan" value={name} onChange={e => setName(e.target.value)}
-                style={s.input()} />
+    <div style={sc()}>
+      <div style={{fontSize:14,fontWeight:600,marginBottom:12}}>{title}</div>
+      <div style={{display:'flex',alignItems:'center',gap:14,flexWrap:'wrap'}}>
+        <svg width={size} height={size} style={{flexShrink:0}}>
+          {slices.map((sl,i)=><path key={i} d={sl.path} fill={sl.color}/>)}
+          <circle cx={cx} cy={cy} r={26} fill={C.cards}/>
+          <text x={cx} y={cy+4} textAnchor="middle" fill={C.white} fontSize={9} fontWeight="bold">{fmt(total)}</text>
+        </svg>
+        <div style={{flex:1,display:'flex',flexDirection:'column',gap:6}}>
+          {slices.map((sl,i)=>(
+            <div key={i} style={{display:'flex',alignItems:'center',gap:7}}>
+              <div style={{width:9,height:9,backgroundColor:sl.color,borderRadius:2,flexShrink:0}}/>
+              <div style={{flex:1,fontSize:12}}>{sl.label}</div>
+              <div style={{fontSize:11,color:C.grey}}>{sl.pct}%</div>
             </div>
-          )}
-          <div style={{ marginBottom: 14 }}>
-            <div style={{ fontSize: 12, color: C.grey, marginBottom: 6 }}>Email</div>
-            <input type="email" placeholder="example@gmail.com" value={email} onChange={e => setEmail(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && handle()}
-              style={s.input()} />
-          </div>
-          <div style={{ marginBottom: 20 }}>
-            <div style={{ fontSize: 12, color: C.grey, marginBottom: 6 }}>Password</div>
-            <input type="password" placeholder="••••••••" value={password} onChange={e => setPassword(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && handle()}
-              style={s.input()} />
-          </div>
-
-          {error && <div style={{ backgroundColor: '#FF174422', border: '1px solid #FF174455', borderRadius: 8, padding: 10, marginBottom: 16, color: C.red, fontSize: 13 }}>⚠️ {error}</div>}
-
-          <button onClick={handle} disabled={loading}
-            style={{ ...s.btn(C.purple, { width: '100%', padding: 14, fontSize: 15 }), opacity: loading ? 0.7 : 1 }}>
-            {loading ? '⏳ Please wait...' : isLogin ? '🔑 Login' : '🚀 Create Account'}
-          </button>
-        </div>
-
-        <div style={{ textAlign: 'center', marginTop: 16, color: C.grey, fontSize: 13 }}>
-          {isLogin ? "Account nahi hai? " : "Already account hai? "}
-          <span onClick={() => { setIsLogin(!isLogin); setError(''); }} style={{ color: C.purple, cursor: 'pointer', fontWeight: 600 }}>
-            {isLogin ? 'Sign Up karo' : 'Login karo'}
-          </span>
+          ))}
         </div>
       </div>
     </div>
   );
 }
 
-// ─── Main SpendSmart App ───────────────────────────────────────────────────────
-function SpendSmart({ user }) {
-  const [screen, setScreen] = useState('dashboard');
-  const [transactions, setTransactions] = useState([]);
-  const [userSettings, setUserSettings] = useState({ monthlyBudget: 10000, incomeCategories: DEF_IN, expenseCategories: DEF_EX, name: '' });
-  const [loaded, setLoaded] = useState(false);
-  const [saveStatus, setSaveStatus] = useState('');
+function Loader({text}) {
+  return <div style={{backgroundColor:C.bg,minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',flexDirection:'column',gap:12}}>
+    <div style={{fontSize:48}}>💸</div>
+    <div style={{color:C.purple,fontSize:22,fontWeight:'bold'}}>SpendSmart</div>
+    <div style={{color:C.grey,fontSize:13}}>{text}</div>
+  </div>;
+}
 
-  // Modals
-  const [showAddModal, setShowAddModal] = useState(false);
-  const [showBudgetModal, setShowBudgetModal] = useState(false);
-  const [editingTx, setEditingTx] = useState(null); // transaction being edited
+function AuthScreen() {
+  const [mode,setMode]=useState('login');
+  const [email,setEmail]=useState('');
+  const [password,setPassword]=useState('');
+  const [name,setName]=useState('');
+  const [error,setError]=useState('');
+  const [success,setSuccess]=useState('');
+  const [loading,setLoading]=useState(false);
 
-  // Form state
-  const [txType, setTxType] = useState('expense');
-  const [amount, setAmount] = useState('');
-  const [note, setNote] = useState('');
-  const [selCat, setSelCat] = useState('');
-  const [selDate, setSelDate] = useState(new Date().toISOString().split('T')[0]);
-  const [newCat, setNewCat] = useState('');
-  const [budgetInput, setBudgetInput] = useState('10000');
-  const [filterType, setFilterType] = useState('all');
-  const [searchText, setSearchText] = useState('');
+  const errMsg = {
+    'auth/user-not-found':'Email nahi mila!',
+    'auth/wrong-password':'Password galat hai!',
+    'auth/email-already-in-use':'Email already registered hai!',
+    'auth/weak-password':'Password 6+ characters ka hona chahiye!',
+    'auth/invalid-email':'Valid email daalo!',
+    'auth/invalid-credential':'Email ya Password galat hai!',
+    'auth/popup-closed-by-user':'Google login cancel ho gaya.',
+    'auth/too-many-requests':'Bahut zyada try kiya. Thodi der baad try karo.',
+  };
 
-  const uid = user.uid;
-
-  // ─── Load user settings ───
-  useEffect(() => {
-    const ref = doc(db, 'users', uid);
-    const unsub = onSnapshot(ref, (snap) => {
-      if (snap.exists()) {
-        const d = snap.data();
-        setUserSettings({ monthlyBudget: d.monthlyBudget || 10000, incomeCategories: d.incomeCategories || DEF_IN, expenseCategories: d.expenseCategories || DEF_EX, name: d.name || '' });
-        setBudgetInput(String(d.monthlyBudget || 10000));
+  const handle = async () => {
+    setError(''); setSuccess('');
+    if (!email||(mode!=='forgot'&&!password)){setError('Sab fields zaroori hain!');return;}
+    if (mode==='signup'&&!name){setError('Naam zaroori hai!');return;}
+    setLoading(true);
+    try {
+      if (mode==='login') {
+        await signInWithEmailAndPassword(auth,email,password);
+      } else if (mode==='signup') {
+        const cred = await createUserWithEmailAndPassword(auth,email,password);
+        await setDoc(doc(db,'users',cred.user.uid),{name,email,monthlyBudget:10000,incomeCategories:DEF_IN,expenseCategories:DEF_EX,createdAt:new Date().toISOString()});
+        try {
+          const raw=localStorage.getItem('spendsmart_data');
+          if(raw){const old=JSON.parse(raw);for(const tx of(old.transactions||[]))await addDoc(collection(db,'users',cred.user.uid,'transactions'),tx);localStorage.removeItem('spendsmart_data');}
+        }catch(e){}
+      } else {
+        await sendPasswordResetEmail(auth,email);
+        setSuccess('✅ Reset link bhej diya! Email check karo (spam bhi dekho).');
+        setLoading(false);return;
       }
-    });
+    } catch(e){setError(errMsg[e.code]||e.message);}
+    setLoading(false);
+  };
+
+  const handleGoogle = async () => {
+    setError('');setLoading(true);
+    try {
+      const result = await signInWithPopup(auth,googleProvider);
+      const u=result.user;
+      const ref=doc(db,'users',u.uid);
+      const snap=await getDoc(ref);
+      if(!snap.exists()) await setDoc(ref,{name:u.displayName||'User',email:u.email,monthlyBudget:10000,incomeCategories:DEF_IN,expenseCategories:DEF_EX,createdAt:new Date().toISOString()});
+    }catch(e){setError(errMsg[e.code]||e.message);}
+    setLoading(false);
+  };
+
+  return (
+    <div style={{backgroundColor:C.bg,minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',fontFamily:"'Segoe UI',sans-serif",padding:20}}>
+      <div style={{width:'100%',maxWidth:380}}>
+        <div style={{textAlign:'center',marginBottom:30}}>
+          <div style={{fontSize:52,marginBottom:8}}>💸</div>
+          <div style={{fontSize:26,fontWeight:'bold',color:C.white}}>SpendSmart</div>
+          <div style={{fontSize:12,color:C.grey,marginTop:4}}>Apne paise ko smart banao</div>
+        </div>
+        <div style={sc({padding:24})}>
+          {mode!=='forgot' && (
+            <div style={{display:'flex',backgroundColor:C.bg,borderRadius:8,padding:4,marginBottom:20}}>
+              {[['login','🔑 Login'],['signup','🚀 Sign Up']].map(([m,lb])=>(
+                <button key={m} onClick={()=>{setMode(m);setError('');setSuccess('');}}
+                  style={sb(mode===m?C.purple:'transparent',{flex:1,padding:'10px',borderRadius:6,fontSize:13})}>{lb}</button>
+              ))}
+            </div>
+          )}
+          {mode==='forgot' && (
+            <div style={{marginBottom:18}}>
+              <button onClick={()=>{setMode('login');setError('');setSuccess('');}} style={{background:'none',border:'none',color:C.grey,cursor:'pointer',fontSize:13,padding:0}}>← Wapas Login</button>
+              <div style={{fontSize:17,fontWeight:'bold',marginTop:8,color:C.white}}>🔑 Password Reset</div>
+              <div style={{fontSize:12,color:C.grey,marginTop:3}}>Email daalo, reset link bhejte hain</div>
+            </div>
+          )}
+          {mode!=='forgot' && (
+            <>
+              <button onClick={handleGoogle} disabled={loading}
+                style={{...sb('#fff',{width:'100%',padding:11,fontSize:13,color:'#333',display:'flex',alignItems:'center',justifyContent:'center',gap:10,marginBottom:14}),opacity:loading?0.7:1}}>
+                <svg width="17" height="17" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+                Google se {mode==='login'?'Login':'Sign Up'} karo
+              </button>
+              <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:14}}>
+                <div style={{flex:1,height:1,backgroundColor:'#2a2a4a'}}/>
+                <span style={{color:C.grey,fontSize:11}}>ya email se</span>
+                <div style={{flex:1,height:1,backgroundColor:'#2a2a4a'}}/>
+              </div>
+            </>
+          )}
+          {mode==='signup'&&<div style={{marginBottom:12}}><div style={{fontSize:12,color:C.grey,marginBottom:5}}>Aapka Naam</div><input placeholder="Jaise: Raiyan" value={name} onChange={e=>setName(e.target.value)} style={si()}/></div>}
+          <div style={{marginBottom:12}}><div style={{fontSize:12,color:C.grey,marginBottom:5}}>Email</div><input type="email" placeholder="example@gmail.com" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>e.key==='Enter'&&handle()} style={si()}/></div>
+          {mode!=='forgot'&&<div style={{marginBottom:mode==='login'?6:18}}><div style={{fontSize:12,color:C.grey,marginBottom:5}}>Password</div><input type="password" placeholder="••••••••" value={password} onChange={e=>setPassword(e.target.value)} onKeyDown={e=>e.key==='Enter'&&handle()} style={si()}/></div>}
+          {mode==='login'&&<div style={{textAlign:'right',marginBottom:16}}><span onClick={()=>{setMode('forgot');setError('');setSuccess('');}} style={{color:C.purple,fontSize:12,cursor:'pointer'}}>Password bhool gaye? 🔑</span></div>}
+          {error&&<div style={{backgroundColor:'#FF174420',border:'1px solid #FF174450',borderRadius:8,padding:10,marginBottom:12,color:C.red,fontSize:13}}>⚠️ {error}</div>}
+          {success&&<div style={{backgroundColor:'#00C85320',border:'1px solid #00C85350',borderRadius:8,padding:10,marginBottom:12,color:C.green,fontSize:13}}>{success}</div>}
+          <button onClick={handle} disabled={loading} style={{...sb(C.purple,{width:'100%',padding:13,fontSize:14}),opacity:loading?0.7:1}}>
+            {loading?'⏳ Please wait...':mode==='login'?'🔑 Login':mode==='signup'?'🚀 Account Banao':'📧 Reset Link Bhejo'}
+          </button>
+        </div>
+        {mode!=='forgot'&&<div style={{textAlign:'center',marginTop:14,color:C.grey,fontSize:13}}>
+          {mode==='login'?'Account nahi hai? ':'Already account hai? '}
+          <span onClick={()=>{setMode(mode==='login'?'signup':'login');setError('');setSuccess('');}} style={{color:C.purple,cursor:'pointer',fontWeight:600}}>{mode==='login'?'Sign Up karo':'Login karo'}</span>
+        </div>}
+      </div>
+    </div>
+  );
+}
+
+function SpendSmart({user}) {
+  const [screen,setScreen]=useState('dashboard');
+  const [transactions,setTransactions]=useState([]);
+  const [settings,setSettings]=useState({monthlyBudget:10000,incomeCategories:DEF_IN,expenseCategories:DEF_EX,name:''});
+  const [loaded,setLoaded]=useState(false);
+  const [saveStatus,setSaveStatus]=useState('');
+  const [showAdd,setShowAdd]=useState(false);
+  const [showBudget,setShowBudget]=useState(false);
+  const [editingTx,setEditingTx]=useState(null);
+  const [txType,setTxType]=useState('expense');
+  const [amount,setAmount]=useState('');
+  const [note,setNote]=useState('');
+  const [selCat,setSelCat]=useState('');
+  const [selDate,setSelDate]=useState(new Date().toISOString().split('T')[0]);
+  const [newCat,setNewCat]=useState('');
+  const [budgetInput,setBudgetInput]=useState('10000');
+  const [filterType,setFilterType]=useState('all');
+  const [filterPeriod,setFilterPeriod]=useState('all');
+  const [searchText,setSearchText]=useState('');
+  const [filterMonth,setFilterMonth]=useState(new Date().toISOString().slice(0,7));
+  const [filterYear,setFilterYear]=useState(new Date().getFullYear().toString());
+  const [graphPeriod,setGraphPeriod]=useState('monthly');
+  const uid=user.uid;
+
+  useEffect(()=>{
+    const unsub=onSnapshot(doc(db,'users',uid),snap=>{
+      if(snap.exists()){const d=snap.data();setSettings({monthlyBudget:d.monthlyBudget||10000,incomeCategories:d.incomeCategories||DEF_IN,expenseCategories:d.expenseCategories||DEF_EX,name:d.name||''});setBudgetInput(String(d.monthlyBudget||10000));}
+    });return unsub;
+  },[uid]);
+
+  useEffect(()=>{
+    const q=query(collection(db,'users',uid,'transactions'),orderBy('date','desc'));
+    const unsub=onSnapshot(q,snap=>{setTransactions(snap.docs.map(d=>({id:d.id,...d.data()})));setLoaded(true);});
     return unsub;
-  }, [uid]);
+  },[uid]);
 
-  // ─── Load transactions real-time ───
-  useEffect(() => {
-    const q = query(collection(db, 'users', uid, 'transactions'), orderBy('date', 'desc'));
-    const unsub = onSnapshot(q, (snap) => {
-      const txns = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      setTransactions(txns);
-      setLoaded(true);
-    });
-    return unsub;
-  }, [uid]);
+  const saveSet=async(upd)=>{setSaveStatus('saving');await setDoc(doc(db,'users',uid),upd,{merge:true});setSaveStatus('saved');setTimeout(()=>setSaveStatus(''),2000);};
 
-  // ─── Save user settings ───
-  const saveSettings = async (updates) => {
+  const handleSaveTx=async()=>{
+    if(!amount||!selCat){alert('Amount aur Category zaroori hai!');return;}
     setSaveStatus('saving');
-    await setDoc(doc(db, 'users', uid), updates, { merge: true });
-    setSaveStatus('saved');
-    setTimeout(() => setSaveStatus(''), 2000);
+    const data={type:txType,category:selCat,amount:parseFloat(amount),date:selDate,note:note||''};
+    if(editingTx) await updateDoc(doc(db,'users',uid,'transactions',editingTx.id),data);
+    else await addDoc(collection(db,'users',uid,'transactions'),{...data,createdAt:new Date().toISOString()});
+    setSaveStatus('saved');setTimeout(()=>setSaveStatus(''),2000);closeModal();
   };
 
-  // ─── Add / Edit transaction ───
-  const handleSaveTx = async () => {
-    if (!amount || !selCat) { alert('Amount aur Category zaroori hai!'); return; }
-    setSaveStatus('saving');
-    const data = { type: txType, category: selCat, amount: parseFloat(amount), date: selDate, note: note || '' };
-    if (editingTx) {
-      await updateDoc(doc(db, 'users', uid, 'transactions', editingTx.id), data);
-    } else {
-      await addDoc(collection(db, 'users', uid, 'transactions'), { ...data, createdAt: new Date().toISOString() });
-    }
-    setSaveStatus('saved');
-    setTimeout(() => setSaveStatus(''), 2000);
-    closeModal();
-  };
-
-  const openEdit = (tx) => {
-    setEditingTx(tx);
-    setTxType(tx.type);
-    setAmount(String(tx.amount));
-    setNote(tx.note || '');
-    setSelCat(tx.category);
-    setSelDate(tx.date);
-    setShowAddModal(true);
-  };
-
-  const closeModal = () => {
-    setShowAddModal(false);
-    setEditingTx(null);
-    setAmount(''); setNote(''); setSelCat(''); setNewCat('');
-    setTxType('expense');
-    setSelDate(new Date().toISOString().split('T')[0]);
-  };
-
-  const deleteTx = async (id) => {
-    if (window.confirm('Delete karna chahte ho?')) {
-      await deleteDoc(doc(db, 'users', uid, 'transactions', id));
-    }
-  };
-
-  const addCustomCat = async () => {
-    if (!newCat.trim()) return;
-    const key = txType === 'income' ? 'incomeCategories' : 'expenseCategories';
-    const current = txType === 'income' ? userSettings.incomeCategories : userSettings.expenseCategories;
-    if (!current.includes(newCat)) {
-      const updated = [...current, newCat];
-      await saveSettings({ [key]: updated });
-      setSelCat(newCat);
-    }
+  const openEdit=tx=>{setEditingTx(tx);setTxType(tx.type);setAmount(String(tx.amount));setNote(tx.note||'');setSelCat(tx.category);setSelDate(tx.date);setShowAdd(true);};
+  const closeModal=()=>{setShowAdd(false);setEditingTx(null);setAmount('');setNote('');setSelCat('');setNewCat('');setTxType('expense');setSelDate(new Date().toISOString().split('T')[0]);};
+  const deleteTx=async id=>{if(window.confirm('Delete karna chahte ho?'))await deleteDoc(doc(db,'users',uid,'transactions',id));};
+  const addCustomCat=async()=>{
+    if(!newCat.trim())return;
+    const key=txType==='income'?'incomeCategories':'expenseCategories';
+    const curr=txType==='income'?settings.incomeCategories:settings.expenseCategories;
+    if(!curr.includes(newCat)){await saveSet({[key]:[...curr,newCat]});setSelCat(newCat);}
     setNewCat('');
   };
 
-  // ─── Computed ───
-  const totalIncome = transactions.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0);
-  const totalExpense = transactions.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
-  const balance = totalIncome - totalExpense;
-  const currentMonth = new Date().toISOString().slice(0, 7);
-  const monthlySpend = transactions.filter(t => t.type === 'expense' && t.date?.startsWith(currentMonth)).reduce((s, t) => s + t.amount, 0);
-  const { monthlyBudget, incomeCategories, expenseCategories, name } = userSettings;
-  const budgetPct = monthlyBudget > 0 ? (monthlySpend / monthlyBudget) * 100 : 0;
-  const budgetWarn = budgetPct >= 80;
-  const progColor = budgetPct > 100 ? C.red : budgetPct > 80 ? '#FFA500' : C.green;
-  const cats = txType === 'income' ? incomeCategories : expenseCategories;
-  const filtered = transactions.filter(t => {
-    const okType = filterType === 'all' || t.type === filterType;
-    const q = searchText.toLowerCase();
-    return okType && ((t.note || '').toLowerCase().includes(q) || t.category.toLowerCase().includes(q));
+  const totalIncome=transactions.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0);
+  const totalExpense=transactions.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0);
+  const balance=totalIncome-totalExpense;
+  const curMonth=new Date().toISOString().slice(0,7);
+  const monthlySpend=transactions.filter(t=>t.type==='expense'&&t.date?.startsWith(curMonth)).reduce((s,t)=>s+t.amount,0);
+  const {monthlyBudget,incomeCategories,expenseCategories,name}=settings;
+  const budgetPct=monthlyBudget>0?(monthlySpend/monthlyBudget)*100:0;
+  const budgetWarn=budgetPct>=80;
+  const progColor=budgetPct>100?C.red:budgetPct>80?C.orange:C.green;
+  const cats=txType==='income'?incomeCategories:expenseCategories;
+
+  const filtered=transactions.filter(t=>{
+    const okT=filterType==='all'||t.type===filterType;
+    const okS=(t.note||'').toLowerCase().includes(searchText.toLowerCase())||t.category.toLowerCase().includes(searchText.toLowerCase());
+    let okP=true;
+    if(filterPeriod==='month') okP=t.date?.startsWith(filterMonth);
+    else if(filterPeriod==='year') okP=t.date?.startsWith(filterYear);
+    else if(filterPeriod==='week'){
+      const now=new Date(),day=now.getDay();
+      const mon=new Date(now);mon.setDate(now.getDate()-(day===0?6:day-1));mon.setHours(0,0,0,0);
+      const sun=new Date(mon);sun.setDate(mon.getDate()+6);sun.setHours(23,59,59,999);
+      const td=new Date(t.date);okP=td>=mon&&td<=sun;
+    }
+    return okT&&okS&&okP;
   });
 
-  if (!loaded) return <Loader text="Aapka data load ho raha hai..." />;
+  const buildGraph=()=>{
+    const map={};
+    transactions.forEach(t=>{
+      let key,label;
+      if(graphPeriod==='weekly'){key=getWeekKey(t.date);label=key.slice(5);}
+      else if(graphPeriod==='monthly'){key=getMonth(t.date);label=new Date(key+'-01').toLocaleString('default',{month:'short'});}
+      else if(graphPeriod==='yearly'){key=getYear(t.date);label=key;}
+      else{key=getMonth(t.date);label=key.slice(2);}
+      if(!map[key])map[key]={income:0,expense:0,label};
+      if(t.type==='income')map[key].income+=t.amount;else map[key].expense+=t.amount;
+    });
+    const sorted=Object.entries(map).sort(([a],[b])=>a.localeCompare(b));
+    return graphPeriod==='weekly'?sorted.slice(-8).map(([,v])=>v):graphPeriod==='monthly'?sorted.slice(-12).map(([,v])=>v):sorted.map(([,v])=>v);
+  };
 
-  return (
-    <div style={{ fontFamily: "'Segoe UI', sans-serif", backgroundColor: C.bg, minHeight: '100vh', color: C.white, display: 'flex', flexDirection: 'column', maxWidth: 480, margin: '0 auto' }}>
+  const graphData=buildGraph();
+  const donutData=expenseCategories.map((cat,i)=>({label:cat,value:transactions.filter(t=>t.type==='expense'&&t.category===cat&&t.date?.startsWith(curMonth)).reduce((s,t)=>s+t.amount,0),color:CAT_CLR[i%CAT_CLR.length]})).filter(d=>d.value>0);
+
+  if(!loaded)return<Loader text="Aapka data load ho raha hai..."/>;
+
+  return(
+    <div style={{fontFamily:"'Segoe UI',sans-serif",backgroundColor:C.bg,minHeight:'100vh',color:C.white,display:'flex',flexDirection:'column',maxWidth:480,margin:'0 auto'}}>
 
       {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 18px', borderBottom: '1px solid #222' }}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'12px 16px',borderBottom:'1px solid #1e1e3a',backgroundColor:C.cards}}>
         <div>
-          <div style={{ fontSize: 20, fontWeight: 'bold' }}>💸 SpendSmart</div>
-          {name && <div style={{ fontSize: 11, color: C.grey }}>👋 {name}</div>}
+          <div style={{fontSize:19,fontWeight:'bold'}}>💸 SpendSmart</div>
+          {name&&<div style={{fontSize:11,color:C.grey}}>👋 {name}</div>}
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          {saveStatus === 'saving' && <span style={{ fontSize: 11, color: C.grey }}>🔄 Saving...</span>}
-          {saveStatus === 'saved' && <span style={{ fontSize: 11, color: C.green }}>✅ Saved!</span>}
-          <button onClick={() => setScreen('budget')} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer' }}>⚙️</button>
-          <button onClick={() => signOut(auth)} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer' }} title="Logout">🚪</button>
+        <div style={{display:'flex',alignItems:'center',gap:8}}>
+          {saveStatus==='saving'&&<span style={{fontSize:11,color:C.grey}}>🔄</span>}
+          {saveStatus==='saved'&&<span style={{fontSize:11,color:C.green}}>✅</span>}
+          <button onClick={()=>signOut(auth)} style={sb('#FF174420',{padding:'6px 10px',borderRadius:6,fontSize:12,color:C.red,border:'1px solid #FF174444'})}>🚪 Logout</button>
         </div>
       </div>
 
-      {/* Content */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: 16, paddingBottom: 90 }}>
+      <div style={{flex:1,overflowY:'auto',padding:14,paddingBottom:90}}>
 
         {/* DASHBOARD */}
-        {screen === 'dashboard' && <>
-          <div style={{ ...s.card({ textAlign: 'center', padding: 24, borderLeftWidth: 0 }) }}>
-            <div style={{ fontSize: 13, color: C.grey, marginBottom: 6 }}>Total Balance</div>
-            <div style={{ fontSize: 44, fontWeight: 'bold', color: balance >= 0 ? C.green : C.red }}>₹{balance.toFixed(2)}</div>
+        {screen==='dashboard'&&<>
+          <div style={sc({textAlign:'center',padding:22,borderLeftWidth:0,background:'linear-gradient(135deg,#1A1A2E,#16213E)'})}>
+            <div style={{fontSize:12,color:C.grey,marginBottom:5}}>Total Balance</div>
+            <div style={{fontSize:40,fontWeight:'bold',color:balance>=0?C.green:C.red}}>{fmt(balance)}</div>
           </div>
-          <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
-            <div style={{ ...s.card({ flex: 1, marginBottom: 0, borderLeft: `4px solid ${C.green}` }) }}>
-              <div style={{ fontSize: 12, color: C.grey, marginBottom: 4 }}>Income</div>
-              <div style={{ fontSize: 20, fontWeight: 'bold', color: C.green }}>+₹{totalIncome.toFixed(2)}</div>
-            </div>
-            <div style={{ ...s.card({ flex: 1, marginBottom: 0, borderLeft: `4px solid ${C.red}` }) }}>
-              <div style={{ fontSize: 12, color: C.grey, marginBottom: 4 }}>Expense</div>
-              <div style={{ fontSize: 20, fontWeight: 'bold', color: C.red }}>-₹{totalExpense.toFixed(2)}</div>
-            </div>
+          <div style={{display:'flex',gap:10,marginBottom:12}}>
+            <div style={sc({flex:1,marginBottom:0,borderLeft:`4px solid ${C.green}`})}><div style={{fontSize:11,color:C.grey,marginBottom:3}}>Income</div><div style={{fontSize:17,fontWeight:'bold',color:C.green}}>+{fmt(totalIncome)}</div></div>
+            <div style={sc({flex:1,marginBottom:0,borderLeft:`4px solid ${C.red}`})}><div style={{fontSize:11,color:C.grey,marginBottom:3}}>Expense</div><div style={{fontSize:17,fontWeight:'bold',color:C.red}}>-{fmt(totalExpense)}</div></div>
           </div>
-          <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 10 }}>Recent Transactions</div>
-          {transactions.length === 0
-            ? <div style={{ ...s.card({ textAlign: 'center', padding: 30 }) }}><div style={{ fontSize: 30, marginBottom: 6 }}>📭</div><div style={{ color: C.grey }}>Koi transaction nahi abhi</div></div>
-            : transactions.slice(0, 5).map(t => (
-              <div key={t.id} style={{ ...s.card({ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 12 }) }}>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 14, fontWeight: 600 }}>{t.category}</div>
-                  <div style={{ fontSize: 11, color: C.grey }}>{t.date}{t.note ? ` • ${t.note}` : ''}</div>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <div style={{ fontWeight: 'bold', color: t.type === 'income' ? C.green : C.red }}>{t.type === 'income' ? '+' : '-'}₹{t.amount.toFixed(2)}</div>
-                  <button onClick={() => openEdit(t)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 16 }}>✏️</button>
+
+          <div style={{fontSize:15,fontWeight:600,marginBottom:10}}>Recent Transactions</div>
+          {transactions.length===0
+            ?<div style={sc({textAlign:'center',padding:28})}><div style={{fontSize:28,marginBottom:6}}>📭</div><div style={{color:C.grey,fontSize:13}}>Koi transaction nahi abhi</div></div>
+            :transactions.slice(0,5).map(t=>(
+              <div key={t.id} style={sc({display:'flex',justifyContent:'space-between',alignItems:'center',padding:11})}>
+                <div style={{flex:1}}><div style={{fontSize:13,fontWeight:600}}>{t.category}</div><div style={{fontSize:11,color:C.grey}}>{t.date}{t.note?` • ${t.note}`:''}</div></div>
+                <div style={{display:'flex',alignItems:'center',gap:8}}>
+                  <div style={{fontWeight:'bold',fontSize:13,color:t.type==='income'?C.green:C.red}}>{t.type==='income'?'+':'-'}{fmt(t.amount)}</div>
+                  <button onClick={()=>openEdit(t)} style={{background:'none',border:'none',cursor:'pointer',fontSize:14}}>✏️</button>
                 </div>
               </div>
             ))
@@ -377,153 +406,165 @@ function SpendSmart({ user }) {
         </>}
 
         {/* HISTORY */}
-        {screen === 'history' && <>
-          <div style={{ display: 'flex', gap: 8, marginBottom: 12, overflowX: 'auto', paddingBottom: 4 }}>
-            {['all','income','expense'].map(f => (
-              <button key={f} onClick={() => setFilterType(f)}
-                style={{ ...s.btn(filterType === f ? C.purple : C.cards, { padding: '8px 16px', borderRadius: 20, whiteSpace: 'nowrap', fontSize: 13 }) }}>
-                {f === 'all' ? 'All' : f === 'income' ? '📈 Income' : '📉 Expense'}
-              </button>
+        {screen==='history'&&<>
+          <div style={{display:'flex',gap:6,marginBottom:8,overflowX:'auto',paddingBottom:2}}>
+            {[['all','All'],['income','📈 Income'],['expense','📉 Expense']].map(([f,lb])=>(
+              <button key={f} onClick={()=>setFilterType(f)} style={sb(filterType===f?C.purple:C.cards,{padding:'7px 13px',borderRadius:20,whiteSpace:'nowrap',fontSize:12})}>{lb}</button>
             ))}
           </div>
-          <input placeholder="🔍 Search..." value={searchText} onChange={e => setSearchText(e.target.value)} style={s.input({ marginBottom: 12 })} />
-          {filtered.length === 0
-            ? <div style={{ ...s.card({ textAlign: 'center', padding: 30 }) }}><div style={{ fontSize: 30, marginBottom: 6 }}>🔍</div><div style={{ color: C.grey }}>Kuch nahi mila</div></div>
-            : filtered.map(t => (
-              <div key={t.id} style={{ ...s.card({ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 12 }) }}>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 14, fontWeight: 600 }}>{t.category}</div>
-                  <div style={{ fontSize: 11, color: C.grey }}>{t.date}{t.note ? ` • ${t.note}` : ''}</div>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <div style={{ fontWeight: 'bold', color: t.type === 'income' ? C.green : C.red }}>{t.type === 'income' ? '+' : '-'}₹{t.amount.toFixed(2)}</div>
-                  <button onClick={() => openEdit(t)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 15 }}>✏️</button>
-                  <button onClick={() => deleteTx(t.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 15 }}>🗑️</button>
+          <div style={{display:'flex',gap:6,marginBottom:8,overflowX:'auto',paddingBottom:2}}>
+            {[['all','All Time'],['week','This Week'],['month','Month'],['year','Year']].map(([f,lb])=>(
+              <button key={f} onClick={()=>setFilterPeriod(f)} style={sb(filterPeriod===f?C.orange:C.cards,{padding:'7px 13px',borderRadius:20,whiteSpace:'nowrap',fontSize:12})}>{lb}</button>
+            ))}
+          </div>
+          {filterPeriod==='month'&&<input type="month" value={filterMonth} onChange={e=>setFilterMonth(e.target.value)} style={si({marginBottom:8,colorScheme:'dark'})}/>}
+          {filterPeriod==='year'&&<select value={filterYear} onChange={e=>setFilterYear(e.target.value)} style={si({marginBottom:8})}>
+            {[...new Set(transactions.map(t=>t.date?.slice(0,4)).filter(Boolean))].sort((a,b)=>b-a).map(y=><option key={y} value={y}>{y}</option>)}
+          </select>}
+          <input placeholder="🔍 Search..." value={searchText} onChange={e=>setSearchText(e.target.value)} style={si({marginBottom:8})}/>
+          <button onClick={()=>generatePDF(filtered,name||user.email)} style={sb(C.dark,{width:'100%',padding:'10px',fontSize:13,marginBottom:10,border:`1px solid ${C.purple}`,color:C.purple})}>
+            📄 PDF Export ({filtered.length} transactions)
+          </button>
+          {filtered.length>0&&<div style={{display:'flex',gap:8,marginBottom:10}}>
+            <div style={sc({flex:1,marginBottom:0,padding:10,textAlign:'center'})}><div style={{fontSize:10,color:C.grey}}>Income</div><div style={{fontSize:13,fontWeight:'bold',color:C.green}}>+{fmt(filtered.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0))}</div></div>
+            <div style={sc({flex:1,marginBottom:0,padding:10,textAlign:'center'})}><div style={{fontSize:10,color:C.grey}}>Expense</div><div style={{fontSize:13,fontWeight:'bold',color:C.red}}>-{fmt(filtered.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0))}</div></div>
+          </div>}
+          {filtered.length===0
+            ?<div style={sc({textAlign:'center',padding:28})}><div style={{fontSize:28,marginBottom:6}}>🔍</div><div style={{color:C.grey,fontSize:13}}>Kuch nahi mila</div></div>
+            :filtered.map(t=>(
+              <div key={t.id} style={sc({display:'flex',justifyContent:'space-between',alignItems:'center',padding:11})}>
+                <div style={{flex:1}}><div style={{fontSize:13,fontWeight:600}}>{t.category}</div><div style={{fontSize:11,color:C.grey}}>{t.date}{t.note?` • ${t.note}`:''}</div></div>
+                <div style={{display:'flex',alignItems:'center',gap:6}}>
+                  <div style={{fontWeight:'bold',fontSize:13,color:t.type==='income'?C.green:C.red}}>{t.type==='income'?'+':'-'}{fmt(t.amount)}</div>
+                  <button onClick={()=>openEdit(t)} style={{background:'none',border:'none',cursor:'pointer',fontSize:14}}>✏️</button>
+                  <button onClick={()=>deleteTx(t.id)} style={{background:'none',border:'none',cursor:'pointer',fontSize:14}}>🗑️</button>
                 </div>
               </div>
             ))
           }
         </>}
 
+        {/* GRAPHS */}
+        {screen==='graphs'&&<>
+          <div style={{display:'flex',gap:6,marginBottom:14,overflowX:'auto',paddingBottom:2}}>
+            {[['weekly','Weekly'],['monthly','Monthly'],['yearly','Yearly'],['lifetime','Lifetime']].map(([p,lb])=>(
+              <button key={p} onClick={()=>setGraphPeriod(p)} style={sb(graphPeriod===p?C.purple:C.cards,{padding:'8px 14px',borderRadius:20,whiteSpace:'nowrap',fontSize:12})}>{lb}</button>
+            ))}
+          </div>
+          <div style={{display:'flex',gap:10,marginBottom:14}}>
+            <div style={sc({flex:1,marginBottom:0,textAlign:'center',borderLeft:`4px solid ${C.green}`})}><div style={{fontSize:10,color:C.grey}}>Total Income</div><div style={{fontSize:15,fontWeight:'bold',color:C.green}}>+{fmt(totalIncome)}</div></div>
+            <div style={sc({flex:1,marginBottom:0,textAlign:'center',borderLeft:`4px solid ${C.red}`})}><div style={{fontSize:10,color:C.grey}}>Total Expense</div><div style={{fontSize:15,fontWeight:'bold',color:C.red}}>-{fmt(totalExpense)}</div></div>
+          </div>
+          <BarGraph data={graphData} title={`${graphPeriod.charAt(0).toUpperCase()+graphPeriod.slice(1)} Overview`}/>
+          <DonutChart data={donutData} title="This Month's Expense Breakdown"/>
+          <div style={sc()}>
+            <div style={{fontSize:14,fontWeight:600,marginBottom:12}}>Category Summary (This Month)</div>
+            {expenseCategories.map((cat,i)=>{
+              const tot=transactions.filter(t=>t.type==='expense'&&t.category===cat&&t.date?.startsWith(curMonth)).reduce((s,t)=>s+t.amount,0);
+              const pct=totalExpense>0?(tot/totalExpense*100).toFixed(0):0;
+              return tot>0?(
+                <div key={cat} style={{marginBottom:10}}>
+                  <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
+                    <span style={{fontSize:12}}>{cat}</span>
+                    <span style={{fontSize:12,color:C.red,fontWeight:'bold'}}>{fmt(tot)} ({pct}%)</span>
+                  </div>
+                  <div style={{height:6,backgroundColor:'#111',borderRadius:3,overflow:'hidden'}}>
+                    <div style={{height:'100%',width:`${pct}%`,backgroundColor:CAT_CLR[i%CAT_CLR.length],borderRadius:3}}/>
+                  </div>
+                </div>
+              ):null;
+            })}
+          </div>
+        </>}
+
         {/* BUDGET */}
-        {screen === 'budget' && <>
-          <div style={{ ...s.card({ textAlign: 'center', padding: 24 }) }}>
-            <div style={{ fontSize: 13, color: C.grey, marginBottom: 6 }}>Monthly Budget</div>
-            <div style={{ fontSize: 44, fontWeight: 'bold', color: C.purple, marginBottom: 12 }}>₹{monthlyBudget.toFixed(2)}</div>
-            <button onClick={() => setShowBudgetModal(true)} style={{ ...s.btn(C.purple, { padding: '8px 20px' }) }}>Edit Budget</button>
+        {screen==='budget'&&<>
+          <div style={sc({textAlign:'center',padding:22})}>
+            <div style={{fontSize:12,color:C.grey,marginBottom:5}}>Monthly Budget</div>
+            <div style={{fontSize:40,fontWeight:'bold',color:C.purple,marginBottom:12}}>{fmt(monthlyBudget)}</div>
+            <button onClick={()=>setShowBudget(true)} style={sb(C.purple,{padding:'8px 20px'})}>Edit Budget</button>
           </div>
-          <div style={{ ...s.card({ borderLeft: `4px solid ${C.purple}` }) }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
-              <span style={{ fontSize: 13, color: C.grey }}>Monthly Spending</span>
-              <span style={{ fontWeight: 'bold', color: budgetWarn ? C.red : C.green }}>₹{monthlySpend.toFixed(2)}</span>
+          <div style={sc({borderLeft:`4px solid ${C.purple}`})}>
+            <div style={{display:'flex',justifyContent:'space-between',marginBottom:10}}>
+              <span style={{fontSize:12,color:C.grey}}>Monthly Spending</span>
+              <span style={{fontWeight:'bold',color:budgetWarn?C.red:C.green}}>{fmt(monthlySpend)}</span>
             </div>
-            <div style={{ height: 18, backgroundColor: '#111', borderRadius: 9, overflow: 'hidden', marginBottom: 8 }}>
-              <div style={{ height: '100%', width: `${Math.min(budgetPct, 100)}%`, backgroundColor: progColor, borderRadius: 9, transition: 'width 0.5s' }} />
+            <div style={{height:18,backgroundColor:'#111',borderRadius:9,overflow:'hidden',marginBottom:8}}>
+              <div style={{height:'100%',width:`${Math.min(budgetPct,100)}%`,backgroundColor:progColor,borderRadius:9,transition:'width 0.5s'}}/>
             </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span style={{ fontSize: 11, color: C.grey }}>{budgetPct.toFixed(1)}% used</span>
-              <span style={{ fontSize: 11, color: budgetWarn ? C.red : C.green }}>₹{(monthlyBudget - monthlySpend).toFixed(2)} remaining</span>
+            <div style={{display:'flex',justifyContent:'space-between'}}>
+              <span style={{fontSize:11,color:C.grey}}>{budgetPct.toFixed(1)}% used</span>
+              <span style={{fontSize:11,color:budgetWarn?C.red:C.green}}>{fmt(monthlyBudget-monthlySpend)} remaining</span>
             </div>
-            {budgetWarn && <div style={{ backgroundColor: '#FF174422', borderRadius: 8, padding: 10, marginTop: 10, border: '1px solid #FF174444' }}>
-              <span style={{ color: C.red, fontSize: 13 }}>⚠️ {budgetPct.toFixed(1)}% budget use ho gaya!</span>
-            </div>}
+            {budgetWarn&&<div style={{backgroundColor:'#FF174420',borderRadius:8,padding:10,marginTop:10,border:'1px solid #FF174444'}}><span style={{color:C.red,fontSize:12}}>⚠️ {budgetPct.toFixed(1)}% budget use ho gaya!</span></div>}
           </div>
-          <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 10 }}>Top Expenses This Month</div>
-          {expenseCategories.map(cat => {
-            const tot = transactions.filter(t => t.type === 'expense' && t.category === cat && t.date?.startsWith(currentMonth)).reduce((s, t) => s + t.amount, 0);
-            return tot > 0 ? (
-              <div key={cat} style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0', borderBottom: '1px solid #222' }}>
-                <span style={{ fontSize: 14 }}>{cat}</span>
-                <span style={{ color: C.red, fontWeight: 'bold' }}>₹{tot.toFixed(2)}</span>
-              </div>
-            ) : null;
-          })}
+          <div style={{fontSize:15,fontWeight:600,marginBottom:10}}>Top Expenses This Month</div>
+          {expenseCategories.map(cat=>{const tot=transactions.filter(t=>t.type==='expense'&&t.category===cat&&t.date?.startsWith(curMonth)).reduce((s,t)=>s+t.amount,0);return tot>0?(<div key={cat} style={{display:'flex',justifyContent:'space-between',padding:'10px 0',borderBottom:'1px solid #1e1e3a'}}><span style={{fontSize:13}}>{cat}</span><span style={{color:C.red,fontWeight:'bold',fontSize:13}}>{fmt(tot)}</span></div>):null;})}
         </>}
       </div>
 
-      {/* Bottom Nav */}
-      <div style={{ position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)', width: '100%', maxWidth: 480, backgroundColor: C.cards, display: 'flex', borderTop: '1px solid #222', zIndex: 50 }}>
-        {[['dashboard','📊','Dashboard'],['history','📜','History'],['budget','💰','Budget']].map(([sc,ic,lb]) => (
-          <button key={sc} onClick={() => setScreen(sc)}
-            style={{ flex: 1, padding: '10px 0', background: 'none', border: 'none', cursor: 'pointer', color: screen === sc ? C.purple : C.grey, fontWeight: 500, fontSize: 11 }}>
-            <div style={{ fontSize: 20 }}>{ic}</div>{lb}
+      {/* Bottom Nav - 4 tabs */}
+      <div style={{position:'fixed',bottom:0,left:'50%',transform:'translateX(-50%)',width:'100%',maxWidth:480,backgroundColor:C.cards,display:'flex',borderTop:'1px solid #1e1e3a',zIndex:50}}>
+        {[['dashboard','📊','Home'],['history','📜','History'],['graphs','📈','Graphs'],['budget','💰','Budget']].map(([s,ic,lb])=>(
+          <button key={s} onClick={()=>setScreen(s)} style={{flex:1,padding:'10px 0',background:'none',border:'none',cursor:'pointer',color:screen===s?C.purple:C.grey,fontWeight:500,fontSize:10}}>
+            <div style={{fontSize:18}}>{ic}</div>{lb}
           </button>
         ))}
       </div>
 
       {/* FAB */}
-      <button onClick={() => { setEditingTx(null); setShowAddModal(true); }}
-        style={{ position: 'fixed', bottom: 72, right: 16, width: 54, height: 54, borderRadius: 27, backgroundColor: C.purple, border: 'none', cursor: 'pointer', fontSize: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 18px rgba(124,77,255,0.7)', zIndex: 51 }}>
+      <button onClick={()=>{setEditingTx(null);setShowAdd(true);}} style={{position:'fixed',bottom:68,right:16,width:52,height:52,borderRadius:26,backgroundColor:C.purple,border:'none',cursor:'pointer',fontSize:22,display:'flex',alignItems:'center',justifyContent:'center',boxShadow:'0 4px 18px rgba(124,77,255,0.7)',zIndex:51}}>
         ➕
       </button>
 
-      {/* ── ADD / EDIT MODAL ── */}
-      {showAddModal && (
-        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.88)', zIndex: 100, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
-          <div style={{ backgroundColor: C.bg, width: '100%', maxWidth: 480, borderRadius: '16px 16px 0 0', maxHeight: '92vh', overflowY: 'auto', padding: 16 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
-              <span style={{ fontSize: 20, fontWeight: 'bold' }}>{editingTx ? '✏️ Edit Transaction' : '➕ Add Transaction'}</span>
-              <button onClick={closeModal} style={{ background: 'none', border: 'none', color: C.white, fontSize: 24, cursor: 'pointer' }}>✕</button>
+      {/* ADD/EDIT MODAL */}
+      {showAdd&&(
+        <div style={{position:'fixed',inset:0,backgroundColor:'rgba(0,0,0,0.9)',zIndex:100,display:'flex',alignItems:'flex-end',justifyContent:'center'}}>
+          <div style={{backgroundColor:C.bg,width:'100%',maxWidth:480,borderRadius:'16px 16px 0 0',maxHeight:'92vh',overflowY:'auto',padding:16}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+              <span style={{fontSize:17,fontWeight:'bold'}}>{editingTx?'✏️ Edit Transaction':'➕ Add Transaction'}</span>
+              <button onClick={closeModal} style={{background:'none',border:'none',color:C.white,fontSize:22,cursor:'pointer'}}>✕</button>
             </div>
-            <div style={{ display: 'flex', gap: 10, marginBottom: 18 }}>
-              <button onClick={() => { setTxType('income'); setSelCat(''); }} style={{ ...s.btn(txType === 'income' ? C.green : C.cards, { flex: 1, padding: 12 }) }}>📈 Income</button>
-              <button onClick={() => { setTxType('expense'); setSelCat(''); }} style={{ ...s.btn(txType === 'expense' ? C.red : C.cards, { flex: 1, padding: 12 }) }}>📉 Expense</button>
+            <div style={{display:'flex',gap:10,marginBottom:14}}>
+              <button onClick={()=>{setTxType('income');setSelCat('');}} style={sb(txType==='income'?C.green:C.cards,{flex:1,padding:11})}>📈 Income</button>
+              <button onClick={()=>{setTxType('expense');setSelCat('');}} style={sb(txType==='expense'?C.red:C.cards,{flex:1,padding:11})}>📉 Expense</button>
             </div>
-            <div style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Amount *</div>
-              <input type="number" placeholder="0.00" value={amount} onChange={e => setAmount(e.target.value)}
-                style={s.input({ fontSize: 26, fontWeight: 'bold', textAlign: 'center', padding: 14 })} />
-            </div>
-            <div style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Note (Optional)</div>
-              <textarea placeholder="Kuch likhna hai?" value={note} onChange={e => setNote(e.target.value)}
-                style={{ ...s.input({ minHeight: 60, resize: 'vertical' }) }} />
-            </div>
-            <div style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Category *</div>
-              <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
-                {cats.map(c => (
-                  <button key={c} onClick={() => setSelCat(c)}
-                    style={{ ...s.btn(selCat === c ? C.purple : C.cards, { padding: '7px 14px', borderRadius: 20, fontSize: 12, whiteSpace: 'nowrap', border: selCat === c ? `2px solid ${C.purple}` : '2px solid transparent' }) }}>{c}</button>
-                ))}
+            <div style={{marginBottom:13}}><div style={{fontSize:12,fontWeight:600,marginBottom:5}}>Amount *</div><input type="number" placeholder="0.00" value={amount} onChange={e=>setAmount(e.target.value)} style={si({fontSize:24,fontWeight:'bold',textAlign:'center',padding:12})}/></div>
+            <div style={{marginBottom:13}}><div style={{fontSize:12,fontWeight:600,marginBottom:5}}>Note (Optional)</div><textarea placeholder="Kuch likhna hai?" value={note} onChange={e=>setNote(e.target.value)} style={si({minHeight:55,resize:'vertical'})}/></div>
+            <div style={{marginBottom:13}}>
+              <div style={{fontSize:12,fontWeight:600,marginBottom:5}}>Category *</div>
+              <div style={{display:'flex',gap:6,overflowX:'auto',paddingBottom:4}}>
+                {cats.map(c=><button key={c} onClick={()=>setSelCat(c)} style={sb(selCat===c?C.purple:C.cards,{padding:'6px 12px',borderRadius:20,fontSize:12,whiteSpace:'nowrap',border:selCat===c?`2px solid ${C.purple}`:'2px solid transparent'})}>{c}</button>)}
               </div>
             </div>
-            <div style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Custom Category</div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <input placeholder="Naya category..." value={newCat} onChange={e => setNewCat(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && addCustomCat()}
-                  style={s.input({ height: 42, padding: '0 12px' })} />
-                <button onClick={addCustomCat} style={{ ...s.btn(C.purple, { width: 42, height: 42, fontSize: 22, display: 'flex', alignItems: 'center', justifyContent: 'center' }) }}>+</button>
-              </div>
-            </div>
-            <div style={{ marginBottom: 18 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Date</div>
-              <input type="date" value={selDate} onChange={e => setSelDate(e.target.value)}
-                style={s.input({ colorScheme: 'dark' })} />
-            </div>
-            <button onClick={handleSaveTx} style={{ ...s.btn(C.purple, { width: '100%', padding: 14, fontSize: 15, marginBottom: 20 }) }}>
-              {editingTx ? '💾 Update Transaction' : '💾 Save Transaction'}
-            </button>
+            <div style={{marginBottom:13}}><div style={{fontSize:12,fontWeight:600,marginBottom:5}}>Custom Category</div><div style={{display:'flex',gap:8}}><input placeholder="Naya category..." value={newCat} onChange={e=>setNewCat(e.target.value)} onKeyDown={e=>e.key==='Enter'&&addCustomCat()} style={si({height:40,padding:'0 10px'})}/><button onClick={addCustomCat} style={sb(C.purple,{width:40,height:40,fontSize:20,display:'flex',alignItems:'center',justifyContent:'center'})}>+</button></div></div>
+            <div style={{marginBottom:14}}><div style={{fontSize:12,fontWeight:600,marginBottom:5}}>Date</div><input type="date" value={selDate} onChange={e=>setSelDate(e.target.value)} style={si({colorScheme:'dark'})}/></div>
+            <button onClick={handleSaveTx} style={sb(C.purple,{width:'100%',padding:13,fontSize:14,marginBottom:14})}>{editingTx?'💾 Update Transaction':'💾 Save Transaction'}</button>
           </div>
         </div>
       )}
 
       {/* BUDGET MODAL */}
-      {showBudgetModal && (
-        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.75)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div style={{ ...s.card({ width: '78%', maxWidth: 290, marginBottom: 0 }) }}>
-            <div style={{ fontSize: 18, fontWeight: 'bold', marginBottom: 14 }}>💰 Budget Set Karo</div>
-            <input type="number" value={budgetInput} onChange={e => setBudgetInput(e.target.value)}
-              style={s.input({ backgroundColor: C.bg, fontSize: 16, marginBottom: 14 })} />
-            <div style={{ display: 'flex', gap: 10 }}>
-              <button onClick={() => setShowBudgetModal(false)} style={{ ...s.btn(C.grey, { flex: 1, padding: 12 }) }}>Cancel</button>
-              <button onClick={() => { saveSettings({ monthlyBudget: parseFloat(budgetInput) || 10000 }); setShowBudgetModal(false); }}
-                style={{ ...s.btn(C.purple, { flex: 1, padding: 12 }) }}>Save</button>
+      {showBudget&&(
+        <div style={{position:'fixed',inset:0,backgroundColor:'rgba(0,0,0,0.8)',zIndex:100,display:'flex',alignItems:'center',justifyContent:'center'}}>
+          <div style={sc({width:'80%',maxWidth:300,marginBottom:0})}>
+            <div style={{fontSize:16,fontWeight:'bold',marginBottom:12}}>💰 Budget Set Karo</div>
+            <input type="number" value={budgetInput} onChange={e=>setBudgetInput(e.target.value)} style={si({fontSize:16,marginBottom:14})}/>
+            <div style={{display:'flex',gap:10}}>
+              <button onClick={()=>setShowBudget(false)} style={sb(C.grey,{flex:1,padding:11})}>Cancel</button>
+              <button onClick={()=>{saveSet({monthlyBudget:parseFloat(budgetInput)||10000});setShowBudget(false);}} style={sb(C.purple,{flex:1,padding:11})}>Save</button>
             </div>
           </div>
         </div>
       )}
     </div>
   );
+}
+
+export default function App() {
+  const [user,setUser]=useState(null);
+  const [loading,setLoading]=useState(true);
+  useEffect(()=>{const u=onAuthStateChanged(auth,u=>{setUser(u);setLoading(false);});return u;},[]);
+  if(loading)return<Loader text="Loading..."/>;
+  return user?<SpendSmart user={user}/>:<AuthScreen/>;
 }
