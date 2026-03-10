@@ -48,6 +48,32 @@ const CURRENCIES = [
   {code:'AUD', symbol:'A$', name:'Australian Dollar'},
 ];
 const getCurrSymbol = (code) => CURRENCIES.find(c=>c.code===code)?.symbol || '₹';
+
+// ⚠️ YAHAN APNI API KEY PASTE KARO (exchangerate-api.com se free mein milegi)
+const EXCHANGE_API_KEY = '932ac721e9d244b340738d9e';
+
+const fetchRates = async () => {
+  try {
+    const cacheKey = 'spendsmart_rates';
+    const cacheTime = 'spendsmart_rates_time';
+    const now = Date.now();
+    const lastFetch = parseInt(localStorage.getItem(cacheTime)||'0');
+    // 24 ghante cache
+    if (now - lastFetch < 24*60*60*1000) {
+      const cached = localStorage.getItem(cacheKey);
+      if (cached) return JSON.parse(cached);
+    }
+    const res = await fetch(`https://v6.exchangerate-api.com/v6/${EXCHANGE_API_KEY}/latest/INR`);
+    const data = await res.json();
+    if (data.result === 'success') {
+      localStorage.setItem(cacheKey, JSON.stringify(data.conversion_rates));
+      localStorage.setItem(cacheTime, String(now));
+      return data.conversion_rates;
+    }
+  } catch(e) {}
+  return null;
+};
+
 const fmt = (n, curr) => {
   const sym = curr ? getCurrSymbol(curr) : '₹';
   return sym + parseFloat(n||0).toFixed(2);
@@ -321,6 +347,8 @@ function SpendSmart({user}) {
   // Savings states
   const [savingsGoals,setSavingsGoals]=useState([]);
   const [showSavePrompt,setShowSavePrompt]=useState(false);
+  const [exchangeRates,setExchangeRates]=useState(null);
+  const [ratesLoading,setRatesLoading]=useState(false);
   const [saveToGoalId,setSaveToGoalId]=useState('');
   const [saveToGoalAmt,setSaveToGoalAmt]=useState('');
   const [showSavingsModal,setShowSavingsModal]=useState(false);
@@ -347,6 +375,17 @@ function SpendSmart({user}) {
     const unsub=onSnapshot(q,snap=>{setRecurringList(snap.docs.map(d=>({id:d.id,...d.data()})));});
     return unsub;
   },[uid]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fetch exchange rates jab currency change ho
+  useEffect(()=>{
+    const curr=settings.currency;
+    if(curr==='INR'){setExchangeRates(null);return;}
+    setRatesLoading(true);
+    fetchRates().then(rates=>{
+      setExchangeRates(rates);
+      setRatesLoading(false);
+    });
+  },[settings.currency]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(()=>{
     const q=query(collection(db,'users',uid,'savings'),orderBy('createdAt','desc'));
@@ -385,13 +424,19 @@ function SpendSmart({user}) {
   const handleSaveTx=async()=>{
     if(!amount||!selCat){alert('Amount aur Category zaroori hai!');return;}
     setSaveStatus('saving');
-    const data={type:txType,category:selCat,amount:parseFloat(amount),date:selDate,note:note||''};
+    const enteredAmt=parseFloat(amount);
+    // User ne jo currency mein enter kiya, use INR mein convert karke save karo
+    let amountInINR=enteredAmt;
+    if(currency!=='INR'&&exchangeRates&&exchangeRates[currency]){
+      amountInINR=enteredAmt/exchangeRates[currency];
+    }
+    const data={type:txType,category:selCat,amount:parseFloat(amountInINR.toFixed(2)),date:selDate,note:note||''};
     if(editingTx) {
       await updateDoc(doc(db,'users',uid,'transactions',editingTx.id),data);
     } else {
       await addDoc(collection(db,'users',uid,'transactions'),{...data,createdAt:new Date().toISOString()});
       if(txType==='income'&&savingsGoals.filter(g=>(g.savedAmount||0)<g.targetAmount).length>0){
-        setSaveToGoalAmt(String(parseFloat(amount)));
+        setSaveToGoalAmt(String(enteredAmt));
         setSaveToGoalId('');
         closeModal();
         setSaveStatus('saved');setTimeout(()=>setSaveStatus(''),2000);
@@ -406,8 +451,37 @@ function SpendSmart({user}) {
     if(!saveToGoalId||!saveToGoalAmt){alert('Goal aur amount zaroori hai!');return;}
     const goal=savingsGoals.find(g=>g.id===saveToGoalId);
     if(!goal)return;
-    const newSaved=(goal.savedAmount||0)+parseFloat(saveToGoalAmt);
-    await updateDoc(doc(db,'users',uid,'savings',saveToGoalId),{savedAmount:newSaved});
+    const enteredAmt=parseFloat(saveToGoalAmt);
+    // User ki currency se INR mein convert karo
+    let enteredInINR=enteredAmt;
+    if(currency!=='INR'&&exchangeRates&&exchangeRates[currency]){
+      enteredInINR=enteredAmt/exchangeRates[currency];
+    }
+    const alreadySaved=goal.savedAmount||0;
+    const remaining=goal.targetAmount-alreadySaved;
+    // Sirf remaining amount tak hi expense karo, zyada nahi
+    const actualAmt=Math.min(parseFloat(enteredInINR.toFixed(2)),remaining);
+    const newSaved=alreadySaved+actualAmt;
+    const today=new Date().toISOString().split('T')[0];
+    // Balance se minus karo — sirf actual amount
+    await addDoc(collection(db,'users',uid,'transactions'),{
+      type:'expense',
+      category:'🏦 '+goal.emoji+' '+goal.title,
+      amount:actualAmt,
+      date:today,
+      note:'💰 Savings Goal Allocation',
+      createdAt:new Date().toISOString()
+    });
+    // Goal update karo
+    const isComplete=newSaved>=goal.targetAmount;
+    await updateDoc(doc(db,'users',uid,'savings',saveToGoalId),{
+      savedAmount:newSaved,
+      ...(isComplete&&{completedAt:today,archived:true})
+    });
+    // Goal complete hone pe — sirf ek info note, no extra expense
+    if(isComplete){
+      alert('🎉 Goal "'+goal.title+'" poora ho gaya! Total saved: ₹'+goal.targetAmount);
+    }
     setShowSavePrompt(false);setSaveToGoalId('');setSaveToGoalAmt('');
   };
 
@@ -436,7 +510,16 @@ function SpendSmart({user}) {
   const curMonth=new Date().toISOString().slice(0,7);
   const monthlySpend=transactions.filter(t=>t.type==='expense'&&t.date?.startsWith(curMonth)).reduce((s,t)=>s+t.amount,0);
   const {monthlyBudget,incomeCategories,expenseCategories,name,currency}=settings;
-  const fmtC=(n)=>fmt(n,currency);
+  const convertAmt=(n)=>{
+    const num=parseFloat(n||0);
+    if(currency==='INR'||!exchangeRates)return num;
+    const rate=exchangeRates[currency];
+    return rate?num*rate:num;
+  };
+  const fmtC=(n)=>{
+    const sym=getCurrSymbol(currency);
+    return sym+convertAmt(n).toFixed(2);
+  };
   const budgetPct=monthlyBudget>0?(monthlySpend/monthlyBudget)*100:0;
   const budgetWarn=budgetPct>=80;
   const progColor=budgetPct>100?C.red:budgetPct>80?C.orange:C.green;
@@ -489,7 +572,9 @@ function SpendSmart({user}) {
         <div style={{display:'flex',alignItems:'center',gap:6}}>
           {saveStatus==='saving'&&<span style={{fontSize:11,color:C.grey}}>🔄</span>}
           {saveStatus==='saved'&&<span style={{fontSize:11,color:C.green}}>✅</span>}
-          <button onClick={()=>setShowCurrency(true)} style={sb('#7C4DFF22',{padding:'6px 8px',borderRadius:6,fontSize:11,color:C.purple,border:'1px solid #7C4DFF44'})}>{getCurrSymbol(currency)} {currency}</button>
+          <button onClick={()=>setShowCurrency(true)} style={sb('#7C4DFF22',{padding:'6px 8px',borderRadius:6,fontSize:11,color:C.purple,border:'1px solid #7C4DFF44'})}>
+            {ratesLoading?'⏳':getCurrSymbol(currency)} {currency}
+          </button>
           <button onClick={()=>setShowRecurring(true)} style={sb('#FFA50022',{padding:'6px 8px',borderRadius:6,fontSize:11,color:C.orange,border:'1px solid #FFA50044'})}>🔄</button>
           <button onClick={()=>signOut(auth)} style={sb('#FF174420',{padding:'6px 8px',borderRadius:6,fontSize:12,color:C.red,border:'1px solid #FF174444'})}>🚪</button>
         </div>
@@ -501,11 +586,11 @@ function SpendSmart({user}) {
         {screen==='dashboard'&&<>
           <div style={sc({textAlign:'center',padding:22,borderLeftWidth:0,background:'linear-gradient(135deg,#1A1A2E,#16213E)'})}>
             <div style={{fontSize:12,color:C.grey,marginBottom:5}}>Total Balance</div>
-            <div style={{fontSize:40,fontWeight:'bold',color:balance>=0?C.green:C.red}}>{fmt(balance)}</div>
+            <div style={{fontSize:40,fontWeight:'bold',color:balance>=0?C.green:C.red}}>{fmtC(balance)}</div>
           </div>
           <div style={{display:'flex',gap:10,marginBottom:12}}>
-            <div style={sc({flex:1,marginBottom:0,borderLeft:`4px solid ${C.green}`})}><div style={{fontSize:11,color:C.grey,marginBottom:3}}>Income</div><div style={{fontSize:17,fontWeight:'bold',color:C.green}}>+{fmt(totalIncome)}</div></div>
-            <div style={sc({flex:1,marginBottom:0,borderLeft:`4px solid ${C.red}`})}><div style={{fontSize:11,color:C.grey,marginBottom:3}}>Expense</div><div style={{fontSize:17,fontWeight:'bold',color:C.red}}>-{fmt(totalExpense)}</div></div>
+            <div style={sc({flex:1,marginBottom:0,borderLeft:`4px solid ${C.green}`})}><div style={{fontSize:11,color:C.grey,marginBottom:3}}>Income</div><div style={{fontSize:17,fontWeight:'bold',color:C.green}}>+{fmtC(totalIncome)}</div></div>
+            <div style={sc({flex:1,marginBottom:0,borderLeft:`4px solid ${C.red}`})}><div style={{fontSize:11,color:C.grey,marginBottom:3}}>Expense</div><div style={{fontSize:17,fontWeight:'bold',color:C.red}}>-{fmtC(totalExpense)}</div></div>
           </div>
 
           <div style={{fontSize:15,fontWeight:600,marginBottom:10}}>Recent Transactions</div>
@@ -528,29 +613,50 @@ function SpendSmart({user}) {
               <div style={{fontSize:15,fontWeight:600}}>🏦 Savings Goals</div>
               <button onClick={()=>setShowSavingsModal(true)} style={sb(C.purple,{padding:'5px 12px',fontSize:11,borderRadius:20})}>+ New Goal</button>
             </div>
-            {savingsGoals.length===0
+            {savingsGoals.filter(g=>!g.archived).length===0&&savingsGoals.filter(g=>g.archived).length===0
               ?<button onClick={()=>setShowSavingsModal(true)} style={sb(C.dark,{width:'100%',padding:12,border:`1px dashed ${C.purple}`,color:C.purple,fontSize:13,borderRadius:10})}>🎯 Pehla Goal Banao</button>
-              :savingsGoals.map(g=>{
-                const pct=g.targetAmount>0?Math.min((g.savedAmount||0)/g.targetAmount*100,100):0;
-                const done=pct>=100;
-                return(
-                  <div key={g.id} style={sc({borderLeft:`4px solid ${done?C.green:C.purple}`,padding:12})}>
-                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
-                      <div style={{fontSize:14,fontWeight:600}}>{g.emoji} {g.title} {done&&'✅'}</div>
+              :null
+            }
+            {savingsGoals.filter(g=>!g.archived).map(g=>{
+              const pct=g.targetAmount>0?Math.min((g.savedAmount||0)/g.targetAmount*100,100):0;
+              return(
+                <div key={g.id} style={sc({borderLeft:`4px solid ${C.purple}`,padding:12})}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+                    <div style={{fontSize:14,fontWeight:600}}>{g.emoji} {g.title}</div>
+                    <button onClick={()=>deleteGoal(g.id)} style={{background:'none',border:'none',cursor:'pointer',fontSize:13}}>🗑️</button>
+                  </div>
+                  <div style={{height:8,backgroundColor:'#111',borderRadius:4,overflow:'hidden',marginBottom:6}}>
+                    <div style={{height:'100%',width:`${pct}%`,backgroundColor:C.purple,borderRadius:4,transition:'width 0.5s'}}/>
+                  </div>
+                  <div style={{display:'flex',justifyContent:'space-between'}}>
+                    <span style={{fontSize:11,color:C.grey}}>{fmtC(g.savedAmount||0)} / {fmtC(g.targetAmount)}</span>
+                    <span style={{fontSize:11,color:C.purple,fontWeight:'bold'}}>{pct.toFixed(0)}%</span>
+                  </div>
+                  {g.deadline&&<div style={{fontSize:10,color:C.grey,marginTop:3}}>📅 {g.deadline}</div>}
+                </div>
+              );
+            })}
+            {savingsGoals.filter(g=>g.archived).length>0&&(
+              <div style={{marginTop:14}}>
+                <div style={{fontSize:13,fontWeight:600,color:C.green,marginBottom:8}}>✅ Completed Goals</div>
+                {savingsGoals.filter(g=>g.archived).map(g=>(
+                  <div key={g.id} style={sc({borderLeft:`4px solid ${C.green}`,padding:12,opacity:0.85})}>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
+                      <div style={{fontSize:14,fontWeight:600}}>{g.emoji} {g.title} ✅</div>
                       <button onClick={()=>deleteGoal(g.id)} style={{background:'none',border:'none',cursor:'pointer',fontSize:13}}>🗑️</button>
                     </div>
                     <div style={{height:8,backgroundColor:'#111',borderRadius:4,overflow:'hidden',marginBottom:6}}>
-                      <div style={{height:'100%',width:`${pct}%`,backgroundColor:done?C.green:C.purple,borderRadius:4,transition:'width 0.5s'}}/>
+                      <div style={{height:'100%',width:'100%',backgroundColor:C.green,borderRadius:4}}/>
                     </div>
                     <div style={{display:'flex',justifyContent:'space-between'}}>
-                      <span style={{fontSize:11,color:C.grey}}>{fmtC(g.savedAmount||0)} / {fmtC(g.targetAmount)}</span>
-                      <span style={{fontSize:11,color:done?C.green:C.purple,fontWeight:'bold'}}>{pct.toFixed(0)}%</span>
+                      <span style={{fontSize:11,color:C.grey}}>{fmtC(g.targetAmount)} saved 🎉</span>
+                      <span style={{fontSize:11,color:C.green,fontWeight:'bold'}}>100%</span>
                     </div>
-                    {g.deadline&&<div style={{fontSize:10,color:C.grey,marginTop:3}}>📅 {g.deadline}</div>}
+                    {g.completedAt&&<div style={{fontSize:10,color:C.green,marginTop:3}}>📅 Completed: {g.completedAt}</div>}
                   </div>
-                );
-              })
-            }
+                ))}
+              </div>
+            )}
           </div>
         </>}
 
@@ -601,8 +707,8 @@ function SpendSmart({user}) {
             ))}
           </div>
           <div style={{display:'flex',gap:10,marginBottom:14}}>
-            <div style={sc({flex:1,marginBottom:0,textAlign:'center',borderLeft:`4px solid ${C.green}`})}><div style={{fontSize:10,color:C.grey}}>Total Income</div><div style={{fontSize:15,fontWeight:'bold',color:C.green}}>+{fmt(totalIncome)}</div></div>
-            <div style={sc({flex:1,marginBottom:0,textAlign:'center',borderLeft:`4px solid ${C.red}`})}><div style={{fontSize:10,color:C.grey}}>Total Expense</div><div style={{fontSize:15,fontWeight:'bold',color:C.red}}>-{fmt(totalExpense)}</div></div>
+            <div style={sc({flex:1,marginBottom:0,textAlign:'center',borderLeft:`4px solid ${C.green}`})}><div style={{fontSize:10,color:C.grey}}>Total Income</div><div style={{fontSize:15,fontWeight:'bold',color:C.green}}>+{fmtC(totalIncome)}</div></div>
+            <div style={sc({flex:1,marginBottom:0,textAlign:'center',borderLeft:`4px solid ${C.red}`})}><div style={{fontSize:10,color:C.grey}}>Total Expense</div><div style={{fontSize:15,fontWeight:'bold',color:C.red}}>-{fmtC(totalExpense)}</div></div>
           </div>
           <BarGraph data={graphData} title={`${graphPeriod.charAt(0).toUpperCase()+graphPeriod.slice(1)} Overview`}/>
           <DonutChart data={donutData} title="This Month's Expense Breakdown"/>
@@ -615,7 +721,7 @@ function SpendSmart({user}) {
                 <div key={cat} style={{marginBottom:10}}>
                   <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
                     <span style={{fontSize:12}}>{cat}</span>
-                    <span style={{fontSize:12,color:C.red,fontWeight:'bold'}}>{fmt(tot)} ({pct}%)</span>
+                    <span style={{fontSize:12,color:C.red,fontWeight:'bold'}}>{fmtC(tot)} ({pct}%)</span>
                   </div>
                   <div style={{height:6,backgroundColor:'#111',borderRadius:3,overflow:'hidden'}}>
                     <div style={{height:'100%',width:`${pct}%`,backgroundColor:CAT_CLR[i%CAT_CLR.length],borderRadius:3}}/>
@@ -630,25 +736,25 @@ function SpendSmart({user}) {
         {screen==='budget'&&<>
           <div style={sc({textAlign:'center',padding:22})}>
             <div style={{fontSize:12,color:C.grey,marginBottom:5}}>Monthly Budget</div>
-            <div style={{fontSize:40,fontWeight:'bold',color:C.purple,marginBottom:12}}>{fmt(monthlyBudget)}</div>
+            <div style={{fontSize:40,fontWeight:'bold',color:C.purple,marginBottom:12}}>{fmtC(monthlyBudget)}</div>
             <button onClick={()=>setShowBudget(true)} style={sb(C.purple,{padding:'8px 20px'})}>Edit Budget</button>
           </div>
           <div style={sc({borderLeft:`4px solid ${C.purple}`})}>
             <div style={{display:'flex',justifyContent:'space-between',marginBottom:10}}>
               <span style={{fontSize:12,color:C.grey}}>Monthly Spending</span>
-              <span style={{fontWeight:'bold',color:budgetWarn?C.red:C.green}}>{fmt(monthlySpend)}</span>
+              <span style={{fontWeight:'bold',color:budgetWarn?C.red:C.green}}>{fmtC(monthlySpend)}</span>
             </div>
             <div style={{height:18,backgroundColor:'#111',borderRadius:9,overflow:'hidden',marginBottom:8}}>
               <div style={{height:'100%',width:`${Math.min(budgetPct,100)}%`,backgroundColor:progColor,borderRadius:9,transition:'width 0.5s'}}/>
             </div>
             <div style={{display:'flex',justifyContent:'space-between'}}>
               <span style={{fontSize:11,color:C.grey}}>{budgetPct.toFixed(1)}% used</span>
-              <span style={{fontSize:11,color:budgetWarn?C.red:C.green}}>{fmt(monthlyBudget-monthlySpend)} remaining</span>
+              <span style={{fontSize:11,color:budgetWarn?C.red:C.green}}>{fmtC(monthlyBudget-monthlySpend)} remaining</span>
             </div>
             {budgetWarn&&<div style={{backgroundColor:'#FF174420',borderRadius:8,padding:10,marginTop:10,border:'1px solid #FF174444'}}><span style={{color:C.red,fontSize:12}}>⚠️ {budgetPct.toFixed(1)}% budget use ho gaya!</span></div>}
           </div>
           <div style={{fontSize:15,fontWeight:600,marginBottom:10}}>Top Expenses This Month</div>
-          {expenseCategories.map(cat=>{const tot=transactions.filter(t=>t.type==='expense'&&t.category===cat&&t.date?.startsWith(curMonth)).reduce((s,t)=>s+t.amount,0);return tot>0?(<div key={cat} style={{display:'flex',justifyContent:'space-between',padding:'10px 0',borderBottom:'1px solid #1e1e3a'}}><span style={{fontSize:13}}>{cat}</span><span style={{color:C.red,fontWeight:'bold',fontSize:13}}>{fmt(tot)}</span></div>):null;})}
+          {expenseCategories.map(cat=>{const tot=transactions.filter(t=>t.type==='expense'&&t.category===cat&&t.date?.startsWith(curMonth)).reduce((s,t)=>s+t.amount,0);return tot>0?(<div key={cat} style={{display:'flex',justifyContent:'space-between',padding:'10px 0',borderBottom:'1px solid #1e1e3a'}}><span style={{fontSize:13}}>{cat}</span><span style={{color:C.red,fontWeight:'bold',fontSize:13}}>{fmtC(tot)}</span></div>):null;})}
         </>}
       </div>
 
@@ -678,7 +784,18 @@ function SpendSmart({user}) {
               <button onClick={()=>{setTxType('income');setSelCat('');}} style={sb(txType==='income'?C.green:C.cards,{flex:1,padding:11})}>📈 Income</button>
               <button onClick={()=>{setTxType('expense');setSelCat('');}} style={sb(txType==='expense'?C.red:C.cards,{flex:1,padding:11})}>📉 Expense</button>
             </div>
-            <div style={{marginBottom:13}}><div style={{fontSize:12,fontWeight:600,marginBottom:5}}>Amount *</div><input type="number" placeholder="0.00" value={amount} onChange={e=>setAmount(e.target.value)} style={si({fontSize:24,fontWeight:'bold',textAlign:'center',padding:12})}/></div>
+            <div style={{marginBottom:13}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:5}}>
+                <div style={{fontSize:12,fontWeight:600}}>Amount *</div>
+                <div style={{fontSize:11,color:C.purple,fontWeight:600}}>{getCurrSymbol(currency)} {currency} mein enter karo</div>
+              </div>
+              <input type="number" placeholder="0.00" value={amount} onChange={e=>setAmount(e.target.value)} style={si({fontSize:24,fontWeight:'bold',textAlign:'center',padding:12})}/>
+              {currency!=='INR'&&amount&&exchangeRates&&exchangeRates[currency]&&(
+                <div style={{fontSize:11,color:C.grey,marginTop:4,textAlign:'center'}}>
+                  = ₹{(parseFloat(amount||0)/exchangeRates[currency]).toFixed(2)} INR mein save hoga
+                </div>
+              )}
+            </div>
             <div style={{marginBottom:13}}><div style={{fontSize:12,fontWeight:600,marginBottom:5}}>Note (Optional)</div><textarea placeholder="Kuch likhna hai?" value={note} onChange={e=>setNote(e.target.value)} style={si({minHeight:55,resize:'vertical'})}/></div>
             <div style={{marginBottom:13}}>
               <div style={{fontSize:12,fontWeight:600,marginBottom:5}}>Category *</div>
@@ -767,14 +884,25 @@ function SpendSmart({user}) {
               <span style={{fontSize:17,fontWeight:'bold'}}>💱 Currency Chunno</span>
               <button onClick={()=>setShowCurrency(false)} style={{background:'none',border:'none',color:C.white,fontSize:22,cursor:'pointer'}}>✕</button>
             </div>
+            {exchangeRates&&currency!=='INR'&&(
+              <div style={{backgroundColor:'#00C85315',border:'1px solid #00C85330',borderRadius:8,padding:'8px 12px',marginBottom:12,fontSize:12,color:C.green}}>
+                📡 Live Rate: 1 INR = {exchangeRates[currency]?.toFixed(4)} {currency}
+              </div>
+            )}
             <div style={{display:'flex',flexDirection:'column',gap:8}}>
-              {CURRENCIES.map(cur=>(
-                <button key={cur.code} onClick={()=>{saveSet({currency:cur.code});setShowCurrency(false);}}
-                  style={sb(currency===cur.code?C.purple:C.dark,{padding:'12px 14px',textAlign:'left',display:'flex',justifyContent:'space-between',alignItems:'center',border:currency===cur.code?`2px solid ${C.purple}`:'2px solid #2a2a4a',borderRadius:10})}>
-                  <span style={{fontSize:13}}>{cur.symbol} {cur.name}</span>
-                  <span style={{fontSize:12,color:currency===cur.code?C.white:C.grey}}>{cur.code} {currency===cur.code?'✓':''}</span>
-                </button>
-              ))}
+              {CURRENCIES.map(cur=>{
+                const rate=exchangeRates?exchangeRates[cur.code]:null;
+                return(
+                  <button key={cur.code} onClick={()=>{saveSet({currency:cur.code});setShowCurrency(false);}}
+                    style={sb(currency===cur.code?C.purple:C.dark,{padding:'12px 14px',textAlign:'left',display:'flex',justifyContent:'space-between',alignItems:'center',border:currency===cur.code?`2px solid ${C.purple}`:'2px solid #2a2a4a',borderRadius:10})}>
+                    <div>
+                      <div style={{fontSize:13}}>{cur.symbol} {cur.name}</div>
+                      {rate&&cur.code!=='INR'&&<div style={{fontSize:10,color:currency===cur.code?'#ffffff99':C.grey,marginTop:2}}>1 ₹ = {rate.toFixed(4)} {cur.code}</div>}
+                    </div>
+                    <span style={{fontSize:12,color:currency===cur.code?C.white:C.grey}}>{cur.code} {currency===cur.code?'✓':''}</span>
+                  </button>
+                );
+              })}
             </div>
           </div>
         </div>
