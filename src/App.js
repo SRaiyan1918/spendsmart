@@ -49,28 +49,37 @@ function generatePDF(transactions, userName) {
   const win = window.open('','_blank');
   const inc = transactions.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0);
   const exp = transactions.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0);
-  const rows = transactions.map(t=>`<tr>
-    <td>${t.date}</td><td>${t.type==='income'?'📈 Income':'📉 Expense'}</td>
-    <td>${t.category}</td><td>${t.note||'-'}</td>
-    <td style="color:${t.type==='income'?'#00C853':'#FF1744'};font-weight:bold">${t.type==='income'?'+':'-'}₹${parseFloat(t.amount).toFixed(2)}</td>
-  </tr>`).join('');
-  win.document.write(`<!DOCTYPE html><html><head><title>SpendSmart Report</title>
-  <style>body{font-family:Arial,sans-serif;padding:30px}h1{color:#7C4DFF}
-  .sum{display:flex;gap:16px;margin:16px 0}.sc{background:#f5f5f5;border-radius:8px;padding:14px;flex:1;text-align:center}
-  .sl{font-size:11px;color:#888;margin-bottom:4px}.sv{font-size:20px;font-weight:bold}
-  table{width:100%;border-collapse:collapse;font-size:12px}th{background:#7C4DFF;color:#fff;padding:9px 7px;text-align:left}
-  td{padding:8px 7px;border-bottom:1px solid #eee}tr:nth-child(even){background:#fafafa}
-  @media print{body{padding:10px}}</style></head><body>
-  <h1>💸 SpendSmart</h1>
-  <p style="color:#888;font-size:12px">Report — ${userName} — ${new Date().toLocaleDateString('en-IN')}</p>
-  <div class="sum">
-    <div class="sc"><div class="sl">Total Income</div><div class="sv" style="color:#00C853">+₹${inc.toFixed(2)}</div></div>
-    <div class="sc"><div class="sl">Total Expense</div><div class="sv" style="color:#FF1744">-₹${exp.toFixed(2)}</div></div>
-    <div class="sc"><div class="sl">Net Balance</div><div class="sv" style="color:${inc-exp>=0?'#00C853':'#FF1744'}">₹${(inc-exp).toFixed(2)}</div></div>
-  </div>
-  <table><thead><tr><th>Date</th><th>Type</th><th>Category</th><th>Note</th><th>Amount</th></tr></thead>
-  <tbody>${rows}</tbody></table>
-  <script>window.onload=()=>window.print()<\/script></body></html>`);
+  const rows = transactions.map(t=>[
+    '<tr>',
+    '<td>'+t.date+'</td>',
+    '<td>'+(t.type==='income'?'Income':'Expense')+'</td>',
+    '<td>'+t.category+'</td>',
+    '<td>'+(t.note||'-')+'</td>',
+    '<td style="color:'+(t.type==='income'?'#00C853':'#FF1744')+';font-weight:bold">'+(t.type==='income'?'+':'-')+'Rs'+parseFloat(t.amount).toFixed(2)+'</td>',
+    '</tr>'
+  ].join('')).join('');
+  const scriptTag = '<scr'+'ipt>window.onload=function(){window.print()}<'+'/scr'+'ipt>';
+  const html = [
+    '<!DOCTYPE html><html><head><title>SpendSmart Report</title>',
+    '<style>body{font-family:Arial,sans-serif;padding:30px}h1{color:#7C4DFF}',
+    '.sum{display:flex;gap:16px;margin:16px 0}.sc{background:#f5f5f5;border-radius:8px;padding:14px;flex:1;text-align:center}',
+    '.sl{font-size:11px;color:#888;margin-bottom:4px}.sv{font-size:20px;font-weight:bold}',
+    'table{width:100%;border-collapse:collapse;font-size:12px}th{background:#7C4DFF;color:#fff;padding:9px 7px;text-align:left}',
+    'td{padding:8px 7px;border-bottom:1px solid #eee}tr:nth-child(even){background:#fafafa}',
+    '@media print{body{padding:10px}}</style></head><body>',
+    '<h1>SpendSmart</h1>',
+    '<p style="color:#888;font-size:12px">Report - '+userName+' - '+new Date().toLocaleDateString('en-IN')+'</p>',
+    '<div class="sum">',
+    '<div class="sc"><div class="sl">Total Income</div><div class="sv" style="color:#00C853">+Rs'+inc.toFixed(2)+'</div></div>',
+    '<div class="sc"><div class="sl">Total Expense</div><div class="sv" style="color:#FF1744">-Rs'+exp.toFixed(2)+'</div></div>',
+    '<div class="sc"><div class="sl">Net Balance</div><div class="sv" style="color:'+(inc-exp>=0?'#00C853':'#FF1744')+'">Rs'+(inc-exp).toFixed(2)+'</div></div>',
+    '</div>',
+    '<table><thead><tr><th>Date</th><th>Type</th><th>Category</th><th>Note</th><th>Amount</th></tr></thead>',
+    '<tbody>'+rows+'</tbody></table>',
+    scriptTag,
+    '</body></html>'
+  ].join('');
+  win.document.write(html);
   win.document.close();
 }
 
