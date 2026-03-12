@@ -391,7 +391,7 @@ function SpendSmart({user}) {
   },[uid]);
 
   useEffect(()=>{
-    const q=query(collection(db,'users',uid,'transactions'),orderBy('date','desc'));
+    const q=query(collection(db,'users',uid,'transactions'),orderBy('date','desc'),orderBy('createdAt','desc'));
     const unsub=onSnapshot(q,snap=>{setTransactions(snap.docs.map(d=>({id:d.id,...d.data()})));setLoaded(true);});
     return unsub;
   },[uid]);
