@@ -391,8 +391,8 @@ function SpendSmart({user}) {
   },[uid]);
 
   useEffect(()=>{
-    const q=query(collection(db,'users',uid,'transactions'),orderBy('date','desc'),orderBy('createdAt','desc'));
-    const unsub=onSnapshot(q,snap=>{setTransactions(snap.docs.map(d=>({id:d.id,...d.data()})));setLoaded(true);});
+    const q=query(collection(db,'users',uid,'transactions'),orderBy('createdAt','desc'));
+    const unsub=onSnapshot(q,snap=>{const txs=snap.docs.map(d=>({id:d.id,...d.data()}));txs.sort((a,b)=>{if(b.date!==a.date)return b.date?.localeCompare(a.date);return (b.createdAt||'').localeCompare(a.createdAt||'');});setTransactions(txs);setLoaded(true);});
     return unsub;
   },[uid]);
 
