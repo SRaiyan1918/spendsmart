@@ -50,7 +50,7 @@ const CURRENCIES = [
 const getCurrSymbol = (code) => CURRENCIES.find(c=>c.code===code)?.symbol || '₹';
 
 // ⚠️ YAHAN APNI API KEY PASTE KARO (exchangerate-api.com se free mein milegi)
-const EXCHANGE_API_KEY = '932ac721e9d244b340738d9e';
+const EXCHANGE_API_KEY = 'YOUR_API_KEY_HERE';
 
 const fetchRates = async () => {
   try {
@@ -72,6 +72,27 @@ const fetchRates = async () => {
     }
   } catch(e) {}
   return null;
+};
+
+// Service Worker register karo for external notifications
+const registerSW = async () => {
+  if ('serviceWorker' in navigator) {
+    try {
+      const reg = await navigator.serviceWorker.register('/sw-budget.js');
+      return reg;
+    } catch(e) { return null; }
+  }
+  return null;
+};
+
+const sendExternalNotif = async (title, body) => {
+  try {
+    if (!('serviceWorker' in navigator)) return;
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') return;
+    const reg = await navigator.serviceWorker.ready;
+    reg.active?.postMessage({ type: 'BUDGET_ALERT', title, body });
+  } catch(e) {}
 };
 
 const fmt = (n, curr) => {
@@ -327,9 +348,11 @@ function SpendSmart({user}) {
   const [recFreq,setRecFreq]=useState('monthly');
   const [recStartDate,setRecStartDate]=useState(new Date().toISOString().split('T')[0]);
   const [loaded,setLoaded]=useState(false);
+  const [notifSent,setNotifSent]=useState({80:false,100:false});
   const [saveStatus,setSaveStatus]=useState('');
   const [showAdd,setShowAdd]=useState(false);
   const [showBudget,setShowBudget]=useState(false);
+  const [budgetAlert,setBudgetAlert]=useState(null);
   const [editingTx,setEditingTx]=useState(null);
   const [txType,setTxType]=useState('expense');
   const [amount,setAmount]=useState('');
@@ -357,6 +380,9 @@ function SpendSmart({user}) {
   const [newGoalEmoji,setNewGoalEmoji]=useState('🎯');
   const [newGoalDeadline,setNewGoalDeadline]=useState('');
   const uid=user.uid;
+
+  // Register service worker on load
+  useEffect(()=>{ registerSW(); },[]);
 
   useEffect(()=>{
     const unsub=onSnapshot(doc(db,'users',uid),snap=>{
@@ -523,6 +549,30 @@ function SpendSmart({user}) {
   const budgetPct=monthlyBudget>0?(monthlySpend/monthlyBudget)*100:0;
   const budgetWarn=budgetPct>=80;
   const progColor=budgetPct>100?C.red:budgetPct>80?C.orange:C.green;
+
+  // Budget Alert useEffect — in-app banner (PWA safe)
+  useEffect(()=>{
+    if(!loaded||monthlyBudget<=0)return;
+    if(budgetPct>=100&&!notifSent[100]){
+      const msg=`🚨 Budget khatam! ${budgetPct.toFixed(0)}% use ho gaya!`;
+      const sub=`Spent: ${fmtC(monthlySpend)} / ${fmtC(monthlyBudget)}`;
+      setBudgetAlert({type:'danger',msg,sub});
+      sendExternalNotif('🚨 SpendSmart — Budget Alert',`${msg} ${sub}`);
+      setNotifSent(p=>({...p,100:true,80:true}));
+    } else if(budgetPct>=80&&!notifSent[80]){
+      const msg='⚠️ Budget 80% use ho gaya!';
+      const sub=`Sirf ${fmtC(monthlyBudget-monthlySpend)} bacha hai`;
+      setBudgetAlert({type:'warn',msg,sub});
+      sendExternalNotif('⚠️ SpendSmart — Budget Alert',`${msg} ${sub}`);
+      setNotifSent(p=>({...p,80:true}));
+    }
+    // Reset sirf tab karo jab bilkul fresh start ho (budget change ya naya month)
+  },[budgetPct,loaded]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Jab budget change ho toh reset karo
+  useEffect(()=>{
+    setNotifSent({80:false,100:false});
+  },[monthlyBudget]); // eslint-disable-line react-hooks/exhaustive-deps
   const cats=txType==='income'?incomeCategories:expenseCategories;
 
   const filtered=transactions.filter(t=>{
@@ -580,6 +630,16 @@ function SpendSmart({user}) {
         </div>
       </div>
 
+      {/* BUDGET ALERT BANNER */}
+      {budgetAlert&&(
+        <div style={{backgroundColor:budgetAlert.type==='danger'?'#FF174420':'#FFA50020',borderBottom:`2px solid ${budgetAlert.type==='danger'?C.red:C.orange}`,padding:'10px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div>
+            <div style={{fontSize:13,fontWeight:'bold',color:budgetAlert.type==='danger'?C.red:C.orange}}>{budgetAlert.msg}</div>
+            <div style={{fontSize:11,color:C.grey,marginTop:2}}>{budgetAlert.sub}</div>
+          </div>
+          <button onClick={()=>setBudgetAlert(null)} style={{background:'none',border:'none',color:C.grey,fontSize:18,cursor:'pointer'}}>✕</button>
+        </div>
+      )}
       <div style={{flex:1,overflowY:'auto',padding:14,paddingBottom:90}}>
 
         {/* DASHBOARD */}
@@ -737,7 +797,10 @@ function SpendSmart({user}) {
           <div style={sc({textAlign:'center',padding:22})}>
             <div style={{fontSize:12,color:C.grey,marginBottom:5}}>Monthly Budget</div>
             <div style={{fontSize:40,fontWeight:'bold',color:C.purple,marginBottom:12}}>{fmtC(monthlyBudget)}</div>
-            <button onClick={()=>setShowBudget(true)} style={sb(C.purple,{padding:'8px 20px'})}>Edit Budget</button>
+            <div style={{display:'flex',gap:8,justifyContent:'center',flexWrap:'wrap'}}>
+              <button onClick={()=>setShowBudget(true)} style={sb(C.purple,{padding:'8px 20px'})}>✏️ Edit Budget</button>
+              <div style={{fontSize:11,color:C.green,padding:'8px 12px',backgroundColor:'#00C85315',borderRadius:8}}>🔔 Auto Alerts ON ✅</div>
+            </div>
           </div>
           <div style={sc({borderLeft:`4px solid ${C.purple}`})}>
             <div style={{display:'flex',justifyContent:'space-between',marginBottom:10}}>
