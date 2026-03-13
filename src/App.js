@@ -1029,10 +1029,47 @@ function SpendSmart({user}) {
   );
 }
 
+function SplashScreen({onDone}) {
+  const [muted,setMuted]=useState(true);
+
+  useEffect(()=>{
+    const t=setTimeout(onDone,7000);
+    return ()=>clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[]);
+
+  return (
+    <div style={{position:'fixed',inset:0,backgroundColor:'#0A0A0A',zIndex:9999}} onClick={onDone}>
+      <video
+        src="/splash.mp4"
+        autoPlay
+        muted={muted}
+        playsInline
+        onEnded={onDone}
+        onError={onDone}
+        style={{width:'100%',height:'100%',objectFit:'contain'}}
+      />
+      <div onClick={e=>{e.stopPropagation();setMuted(m=>!m);}}
+        style={{position:'absolute',top:16,right:16,backgroundColor:'rgba(0,0,0,0.5)',borderRadius:20,padding:'6px 12px',color:'#fff',fontSize:18,cursor:'pointer'}}>
+        {muted?'🔇':'🔊'}
+      </div>
+      <div style={{position:'absolute',bottom:30,width:'100%',textAlign:'center',fontSize:12,color:'rgba(255,255,255,0.3)'}}>tap to skip</div>
+    </div>
+  );
+}
+
 export default function App() {
   const [user,setUser]=useState(null);
   const [loading,setLoading]=useState(true);
+  const [showSplash,setShowSplash]=useState(()=>{
+    // Sirf pehli baar splash dikhao — har baar nahi
+    const seen=sessionStorage.getItem('splash_seen');
+    return !seen;
+  });
+
   useEffect(()=>{const u=onAuthStateChanged(auth,u=>{setUser(u);setLoading(false);});return u;},[]);
-  if(loading)return<Loader text="Loading..."/>;
+
+  if(showSplash) return <SplashScreen onDone={()=>{sessionStorage.setItem('splash_seen','1');setShowSplash(false);}}/>;
+  if(loading) return <Loader text="Loading..."/>;
   return user?<SpendSmart user={user}/>:<AuthScreen/>;
 }
