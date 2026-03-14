@@ -379,6 +379,19 @@ function SpendSmart({user}) {
   const [newGoalTarget,setNewGoalTarget]=useState('');
   const [newGoalEmoji,setNewGoalEmoji]=useState('🎯');
   const [newGoalDeadline,setNewGoalDeadline]=useState('');
+  // Udhar states
+  const [udharList,setUdharList]=useState([]);
+  const [showUdharModal,setShowUdharModal]=useState(false);
+  const [showReturnModal,setShowReturnModal]=useState(false);
+  const [selectedUdhar,setSelectedUdhar]=useState(null);
+  const [udharType,setUdharType]=useState('gave'); // gave=maine diya, took=mujhe mila
+  const [udharName,setUdharName]=useState('');
+  const [udharAmount,setUdharAmount]=useState('');
+  const [udharDate,setUdharDate]=useState(new Date().toISOString().split('T')[0]);
+  const [udharDue,setUdharDue]=useState('');
+  const [udharNote,setUdharNote]=useState('');
+  const [returnAmount,setReturnAmount]=useState('');
+  const [showRibaWarn,setShowRibaWarn]=useState(false);
   const uid=user.uid;
 
   // Register service worker on load
@@ -418,6 +431,13 @@ function SpendSmart({user}) {
     const unsub=onSnapshot(q,snap=>{setSavingsGoals(snap.docs.map(d=>({id:d.id,...d.data()})));});
     return unsub;
   },[uid]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(()=>{
+    const q=query(collection(db,'users',uid,'udhar'),orderBy('createdAt','desc'));
+    const unsub=onSnapshot(q,snap=>{setUdharList(snap.docs.map(d=>({id:d.id,...d.data()})));});
+    return unsub;
+  },[uid]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(()=>{
     if(recurringList.length===0||transactions.length===0) return;
     const today=new Date().toISOString().split('T')[0];
@@ -518,6 +538,56 @@ function SpendSmart({user}) {
   };
 
   const deleteGoal=async id=>{if(window.confirm('Goal delete karna chahte ho?'))await deleteDoc(doc(db,'users',uid,'savings',id));};
+
+  // Udhar functions
+  const saveUdhar=async()=>{
+    if(!udharName||!udharAmount){alert('Naam aur Amount zaroori hai!');return;}
+    await addDoc(collection(db,'users',uid,'udhar'),{
+      type:udharType,
+      name:udharName,
+      amount:parseFloat(udharAmount),
+      returned:0,
+      dueDate:udharDue||'',
+      note:udharNote||'',
+      date:udharDate,
+      status:'active',
+      returns:[],
+      createdAt:new Date().toISOString()
+    });
+    setUdharName('');setUdharAmount('');setUdharDue('');setUdharNote('');setUdharType('gave');
+    setShowUdharModal(false);
+  };
+
+  const addReturn=async()=>{
+    if(!selectedUdhar||!returnAmount){alert('Amount zaroori hai!');return;}
+    const retAmt=parseFloat(returnAmount);
+    const original=selectedUdhar.amount;
+    // Riba check — agar wapas zyada aa raha hai
+    if(selectedUdhar.type==='gave'&&retAmt>(original-selectedUdhar.returned)){
+      setShowRibaWarn(true);return;
+    }
+    const newReturned=(selectedUdhar.returned||0)+retAmt;
+    const newReturns=[...(selectedUdhar.returns||[]),{amount:retAmt,date:new Date().toISOString().split('T')[0]}];
+    const isComplete=newReturned>=original;
+    await updateDoc(doc(db,'users',uid,'udhar',selectedUdhar.id),{
+      returned:newReturned,
+      returns:newReturns,
+      status:isComplete?'completed':'active',
+      completedAt:isComplete?new Date().toISOString().split('T')[0]:null
+    });
+    setReturnAmount('');setShowReturnModal(false);setSelectedUdhar(null);
+  };
+
+  const deleteUdhar=async id=>{if(window.confirm('Delete karna chahte ho?'))await deleteDoc(doc(db,'users',uid,'udhar',id));};
+
+  // Trust score — kitni baar poora wapas kiya
+  const getTrustScore=(name)=>{
+    const entries=udharList.filter(u=>u.name.toLowerCase()===name.toLowerCase()&&u.type==='gave');
+    if(entries.length===0)return null;
+    const completed=entries.filter(u=>u.status==='completed').length;
+    const pct=Math.round((completed/entries.length)*100);
+    return{total:entries.length,completed,pct};
+  };
 
   const openEdit=tx=>{setEditingTx(tx);setTxType(tx.type);setAmount(String(tx.amount));setNote(tx.note||'');setSelCat(tx.category);setSelDate(tx.date);setShowAdd(true);};
   const closeModal=()=>{setShowAdd(false);setEditingTx(null);setAmount('');setNote('');setSelCat('');setNewCat('');setTxType('expense');setSelDate(new Date().toISOString().split('T')[0]);};
@@ -819,13 +889,98 @@ function SpendSmart({user}) {
           <div style={{fontSize:15,fontWeight:600,marginBottom:10}}>Top Expenses This Month</div>
           {expenseCategories.map(cat=>{const tot=transactions.filter(t=>t.type==='expense'&&t.category===cat&&t.date?.startsWith(curMonth)).reduce((s,t)=>s+t.amount,0);return tot>0?(<div key={cat} style={{display:'flex',justifyContent:'space-between',padding:'10px 0',borderBottom:'1px solid #1e1e3a'}}><span style={{fontSize:13}}>{cat}</span><span style={{color:C.red,fontWeight:'bold',fontSize:13}}>{fmtC(tot)}</span></div>):null;})}
         </>}
+
+        {/* UDHAR TRACKER */}
+        {screen==='udhar'&&<>
+          {/* Summary cards */}
+          <div style={{display:'flex',gap:10,marginBottom:14}}>
+            <div style={sc({flex:1,marginBottom:0,borderLeft:`4px solid ${C.orange}`,padding:12})}>
+              <div style={{fontSize:10,color:C.grey,marginBottom:3}}>💸 Maine Diya</div>
+              <div style={{fontSize:16,fontWeight:'bold',color:C.orange}}>{fmtC(udharList.filter(u=>u.type==='gave'&&u.status==='active').reduce((s,u)=>s+(u.amount-(u.returned||0)),0))}</div>
+              <div style={{fontSize:10,color:C.grey}}>Pending wapas</div>
+            </div>
+            <div style={sc({flex:1,marginBottom:0,borderLeft:`4px solid ${C.purple}`,padding:12})}>
+              <div style={{fontSize:10,color:C.grey,marginBottom:3}}>💰 Mujhe Milega</div>
+              <div style={{fontSize:16,fontWeight:'bold',color:C.purple}}>{fmtC(udharList.filter(u=>u.type==='took'&&u.status==='active').reduce((s,u)=>s+(u.amount-(u.returned||0)),0))}</div>
+              <div style={{fontSize:10,color:C.grey}}>Dena baaki</div>
+            </div>
+          </div>
+
+          {/* Add button */}
+          <button onClick={()=>setShowUdharModal(true)} style={sb(C.orange,{width:'100%',padding:12,fontSize:13,marginBottom:14,borderRadius:10})}>🤝 Naya Udhar Add Karo</button>
+
+          {/* Active udhar list */}
+          {udharList.filter(u=>u.status==='active').length>0&&(
+            <div style={{marginBottom:16}}>
+              <div style={{fontSize:13,fontWeight:600,color:C.grey,marginBottom:8}}>Active Udhar</div>
+              {udharList.filter(u=>u.status==='active').map(u=>{
+                const remaining=u.amount-(u.returned||0);
+                const pct=Math.round(((u.returned||0)/u.amount)*100);
+                const trust=getTrustScore(u.name);
+                const isOverdue=u.dueDate&&new Date(u.dueDate)<new Date();
+                return(
+                  <div key={u.id} style={sc({borderLeft:`4px solid ${u.type==='gave'?C.orange:C.purple}`,padding:12,marginBottom:10})}>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:6}}>
+                      <div>
+                        <div style={{fontSize:14,fontWeight:600}}>{u.type==='gave'?'💸':'💰'} {u.name}</div>
+                        <div style={{fontSize:11,color:C.grey}}>{u.type==='gave'?'Maine diya':'Mujhe lena hai'} • {u.date}</div>
+                        {u.dueDate&&<div style={{fontSize:10,color:isOverdue?C.red:C.grey,marginTop:2}}>{isOverdue?'⚠️ Overdue!':'📅'} Due: {u.dueDate}</div>}
+                        {trust&&<div style={{fontSize:10,color:trust.pct>=80?C.green:trust.pct>=50?C.orange:C.red,marginTop:2}}>{trust.pct>=80?'⭐ Trusted':trust.pct>=50?'🟡 Average':'🔴 Unreliable'} ({trust.completed}/{trust.total})</div>}
+                      </div>
+                      <button onClick={()=>deleteUdhar(u.id)} style={{background:'none',border:'none',cursor:'pointer',fontSize:13}}>🗑️</button>
+                    </div>
+                    <div style={{height:6,backgroundColor:'#111',borderRadius:3,overflow:'hidden',marginBottom:6}}>
+                      <div style={{height:'100%',width:`${pct}%`,backgroundColor:u.type==='gave'?C.orange:C.purple,borderRadius:3,transition:'width 0.4s'}}/>
+                    </div>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                      <div>
+                        <span style={{fontSize:11,color:C.grey}}>{fmtC(u.returned||0)} returned • </span>
+                        <span style={{fontSize:11,fontWeight:'bold',color:u.type==='gave'?C.orange:C.purple}}>{fmtC(remaining)} baaki</span>
+                      </div>
+                      <button onClick={()=>{setSelectedUdhar(u);setReturnAmount('');setShowReturnModal(true);}} style={sb(u.type==='gave'?C.orange:C.purple,{padding:'5px 12px',fontSize:11,borderRadius:16})}>
+                        {u.type==='gave'?'Wapas Mila?':'Maine Diya?'}
+                      </button>
+                    </div>
+                    {u.note&&<div style={{fontSize:11,color:C.grey,marginTop:4}}>📝 {u.note}</div>}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Completed udhar */}
+          {udharList.filter(u=>u.status==='completed').length>0&&(
+            <div>
+              <div style={{fontSize:13,fontWeight:600,color:C.green,marginBottom:8}}>✅ Completed</div>
+              {udharList.filter(u=>u.status==='completed').map(u=>(
+                <div key={u.id} style={sc({borderLeft:`4px solid ${C.green}`,padding:12,marginBottom:8,opacity:0.8})}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                    <div>
+                      <div style={{fontSize:13,fontWeight:600}}>{u.name} ✅</div>
+                      <div style={{fontSize:11,color:C.grey}}>{fmtC(u.amount)} • {u.type==='gave'?'Wapas mila':'Wapas diya'}</div>
+                      {u.completedAt&&<div style={{fontSize:10,color:C.green}}>📅 {u.completedAt}</div>}
+                    </div>
+                    <button onClick={()=>deleteUdhar(u.id)} style={{background:'none',border:'none',cursor:'pointer',fontSize:13}}>🗑️</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {udharList.length===0&&(
+            <div style={sc({textAlign:'center',padding:32})}>
+              <div style={{fontSize:36,marginBottom:8}}>🤝</div>
+              <div style={{color:C.grey,fontSize:13}}>Koi udhar nahi abhi</div>
+            </div>
+          )}
+        </>}
       </div>
 
-      {/* Bottom Nav - 4 tabs */}
+      {/* Bottom Nav - 5 tabs */}
       <div style={{position:'fixed',bottom:0,left:'50%',transform:'translateX(-50%)',width:'100%',maxWidth:480,backgroundColor:C.cards,display:'flex',borderTop:'1px solid #1e1e3a',zIndex:50}}>
-        {[['dashboard','📊','Home'],['history','📜','History'],['graphs','📈','Graphs'],['budget','💰','Budget']].map(([s,ic,lb])=>(
-          <button key={s} onClick={()=>setScreen(s)} style={{flex:1,padding:'10px 0',background:'none',border:'none',cursor:'pointer',color:screen===s?C.purple:C.grey,fontWeight:500,fontSize:10}}>
-            <div style={{fontSize:18}}>{ic}</div>{lb}
+        {[['dashboard','📊','Home'],['history','📜','History'],['graphs','📈','Graphs'],['budget','💰','Budget'],['udhar','🤝','Udhar']].map(([s,ic,lb])=>(
+          <button key={s} onClick={()=>setScreen(s)} style={{flex:1,padding:'10px 0',background:'none',border:'none',cursor:'pointer',color:screen===s?C.purple:C.grey,fontWeight:500,fontSize:9}}>
+            <div style={{fontSize:16}}>{ic}</div>{lb}
           </button>
         ))}
       </div>
@@ -869,6 +1024,66 @@ function SpendSmart({user}) {
             <div style={{marginBottom:13}}><div style={{fontSize:12,fontWeight:600,marginBottom:5}}>Custom Category</div><div style={{display:'flex',gap:8}}><input placeholder="Naya category..." value={newCat} onChange={e=>setNewCat(e.target.value)} onKeyDown={e=>e.key==='Enter'&&addCustomCat()} style={si({height:40,padding:'0 10px'})}/><button onClick={addCustomCat} style={sb(C.purple,{width:40,height:40,fontSize:20,display:'flex',alignItems:'center',justifyContent:'center'})}>+</button></div></div>
             <div style={{marginBottom:14}}><div style={{fontSize:12,fontWeight:600,marginBottom:5}}>Date</div><input type="date" value={selDate} onChange={e=>setSelDate(e.target.value)} style={si({colorScheme:'dark'})}/></div>
             <button onClick={handleSaveTx} style={sb(C.purple,{width:'100%',padding:13,fontSize:14,marginBottom:14})}>{editingTx?'💾 Update Transaction':'💾 Save Transaction'}</button>
+          </div>
+        </div>
+      )}
+
+      {/* UDHAR ADD MODAL */}
+      {showUdharModal&&(
+        <div style={{position:'fixed',inset:0,backgroundColor:'rgba(0,0,0,0.9)',zIndex:100,display:'flex',alignItems:'flex-end',justifyContent:'center'}}>
+          <div style={{backgroundColor:C.bg,width:'100%',maxWidth:480,borderRadius:'16px 16px 0 0',maxHeight:'92vh',overflowY:'auto',padding:16}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+              <span style={{fontSize:17,fontWeight:'bold'}}>🤝 Udhar Add Karo</span>
+              <button onClick={()=>setShowUdharModal(false)} style={{background:'none',border:'none',color:C.white,fontSize:22,cursor:'pointer'}}>✕</button>
+            </div>
+            <div style={{display:'flex',gap:10,marginBottom:14}}>
+              <button onClick={()=>setUdharType('gave')} style={sb(udharType==='gave'?C.orange:C.cards,{flex:1,padding:11,fontSize:13})}>💸 Maine Diya</button>
+              <button onClick={()=>setUdharType('took')} style={sb(udharType==='took'?C.purple:C.cards,{flex:1,padding:11,fontSize:13})}>💰 Mujhe Lena</button>
+            </div>
+            <div style={{marginBottom:12}}><div style={{fontSize:12,color:C.grey,marginBottom:5}}>Naam *</div><input placeholder="Jaise: Ahmed Bhai" value={udharName} onChange={e=>setUdharName(e.target.value)} style={si()}/></div>
+            <div style={{marginBottom:12}}><div style={{fontSize:12,color:C.grey,marginBottom:5}}>Amount *</div><input type="number" placeholder="0.00" value={udharAmount} onChange={e=>setUdharAmount(e.target.value)} style={si({fontSize:20,fontWeight:'bold',textAlign:'center'})}/></div>
+            <div style={{marginBottom:12}}><div style={{fontSize:12,color:C.grey,marginBottom:5}}>Date</div><input type="date" value={udharDate} onChange={e=>setUdharDate(e.target.value)} style={si({colorScheme:'dark'})}/></div>
+            <div style={{marginBottom:12}}><div style={{fontSize:12,color:C.grey,marginBottom:5}}>Due Date (Optional)</div><input type="date" value={udharDue} onChange={e=>setUdharDue(e.target.value)} style={si({colorScheme:'dark'})}/></div>
+            <div style={{marginBottom:14}}><div style={{fontSize:12,color:C.grey,marginBottom:5}}>Note (Optional)</div><input placeholder="Kuch likhna hai?" value={udharNote} onChange={e=>setUdharNote(e.target.value)} style={si()}/></div>
+            <div style={{backgroundColor:'#FFA50015',border:'1px solid #FFA50030',borderRadius:8,padding:10,marginBottom:14}}>
+              <div style={{fontSize:11,color:C.orange}}>🕌 Islamic Reminder: Udhar mein zyada wapas lena Riba hai aur Haram hai. Sirf original amount hi maango.</div>
+            </div>
+            <button onClick={saveUdhar} style={sb(C.orange,{width:'100%',padding:13,fontSize:14,marginBottom:14})}>💾 Save Karo</button>
+          </div>
+        </div>
+      )}
+
+      {/* RETURN MODAL */}
+      {showReturnModal&&selectedUdhar&&(
+        <div style={{position:'fixed',inset:0,backgroundColor:'rgba(0,0,0,0.88)',zIndex:100,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
+          <div style={sc({width:'100%',maxWidth:340,marginBottom:0,padding:20})}>
+            <div style={{fontSize:17,fontWeight:'bold',marginBottom:4}}>{selectedUdhar.type==='gave'?'💸 Wapas Mila?':'💰 Maine Diya?'}</div>
+            <div style={{fontSize:12,color:C.grey,marginBottom:4}}>{selectedUdhar.name}</div>
+            <div style={{fontSize:12,color:C.orange,marginBottom:16}}>Baaki: {fmtC(selectedUdhar.amount-(selectedUdhar.returned||0))}</div>
+            <div style={{marginBottom:16}}>
+              <div style={{fontSize:12,color:C.grey,marginBottom:5}}>Amount *</div>
+              <input type="number" value={returnAmount} onChange={e=>setReturnAmount(e.target.value)} style={si({fontSize:20,fontWeight:'bold',textAlign:'center'})}/>
+            </div>
+            <div style={{display:'flex',gap:10}}>
+              <button onClick={()=>{setShowReturnModal(false);setSelectedUdhar(null);}} style={sb(C.grey,{flex:1,padding:11})}>Cancel</button>
+              <button onClick={addReturn} style={sb(C.orange,{flex:1,padding:11})}>✅ Confirm</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* RIBA WARNING MODAL */}
+      {showRibaWarn&&(
+        <div style={{position:'fixed',inset:0,backgroundColor:'rgba(0,0,0,0.95)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
+          <div style={sc({width:'100%',maxWidth:340,marginBottom:0,padding:24,border:`2px solid ${C.red}`,textAlign:'center'})}>
+            <div style={{fontSize:48,marginBottom:8}}>🚨</div>
+            <div style={{fontSize:20,fontWeight:'bold',color:C.red,marginBottom:8}}>RIBA HARAM HAI!</div>
+            <div style={{fontSize:14,color:C.white,marginBottom:8}}>Aap original amount se ZYADA wapas maang rahe ho!</div>
+            <div style={{fontSize:13,color:C.grey,marginBottom:16}}>لا تأكلوا الرّبا — Riba mat khao (Al-Baqarah 2:275)</div>
+            <div style={{backgroundColor:'#FF174415',borderRadius:8,padding:10,marginBottom:16}}>
+              <div style={{fontSize:12,color:C.orange}}>Sirf original amount hi maango jo tumne diya tha — yahi Islam ka hukm hai.</div>
+            </div>
+            <button onClick={()=>setShowRibaWarn(false)} style={sb(C.red,{width:'100%',padding:12,fontSize:14})}>Samajh Gaya ✔️</button>
           </div>
         </div>
       )}
