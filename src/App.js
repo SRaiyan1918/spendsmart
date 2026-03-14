@@ -601,10 +601,11 @@ function SpendSmart({user}) {
   };
 
   const totalIncome=transactions.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0);
-  const totalExpense=transactions.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0);
+  const totalRefund=transactions.filter(t=>t.type==='refund').reduce((s,t)=>s+t.amount,0);
+  const totalExpense=transactions.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0)-totalRefund;
   const balance=totalIncome-totalExpense;
   const curMonth=new Date().toISOString().slice(0,7);
-  const monthlySpend=transactions.filter(t=>t.type==='expense'&&t.date?.startsWith(curMonth)).reduce((s,t)=>s+t.amount,0);
+  const monthlySpend=transactions.filter(t=>t.type==='expense'&&t.date?.startsWith(curMonth)).reduce((s,t)=>s+t.amount,0)-transactions.filter(t=>t.type==='refund'&&t.date?.startsWith(curMonth)).reduce((s,t)=>s+t.amount,0);
   const {monthlyBudget,incomeCategories,expenseCategories,name,currency}=settings;
   const convertAmt=(n)=>{
     const num=parseFloat(n||0);
@@ -643,7 +644,7 @@ function SpendSmart({user}) {
   useEffect(()=>{
     setNotifSent({80:false,100:false});
   },[monthlyBudget]); // eslint-disable-line react-hooks/exhaustive-deps
-  const cats=txType==='income'?incomeCategories:expenseCategories;
+  const cats=txType==='income'?incomeCategories:expenseCategories; // refund also uses expense cats
 
   const filtered=transactions.filter(t=>{
     const okT=filterType==='all'||t.type===filterType;
@@ -730,7 +731,7 @@ function SpendSmart({user}) {
               <div key={t.id} style={sc({display:'flex',justifyContent:'space-between',alignItems:'center',padding:11})}>
                 <div style={{flex:1}}><div style={{fontSize:13,fontWeight:600}}>{t.category}</div><div style={{fontSize:11,color:C.grey}}>{t.date}{t.note?` • ${t.note}`:''}</div></div>
                 <div style={{display:'flex',alignItems:'center',gap:8}}>
-                  <div style={{fontWeight:'bold',fontSize:13,color:t.type==='income'?C.green:C.red}}>{t.type==='income'?'+':'-'}{fmtC(t.amount)}</div>
+                  <div style={{fontWeight:'bold',fontSize:13,color:t.type==='income'?C.green:t.type==='refund'?C.orange:C.red}}>{t.type==='income'?'+':t.type==='refund'?'↩':'-'}{fmtC(t.amount)}</div>
                   <button onClick={()=>openEdit(t)} style={{background:'none',border:'none',cursor:'pointer',fontSize:14}}>✏️</button>
                 </div>
               </div>
@@ -793,7 +794,7 @@ function SpendSmart({user}) {
         {/* HISTORY */}
         {screen==='history'&&<>
           <div style={{display:'flex',gap:6,marginBottom:8,overflowX:'auto',paddingBottom:2}}>
-            {[['all','All'],['income','📈 Income'],['expense','📉 Expense']].map(([f,lb])=>(
+            {[['all','All'],['income','📈 Income'],['expense','📉 Expense'],['refund','🔄 Refund']].map(([f,lb])=>(
               <button key={f} onClick={()=>setFilterType(f)} style={sb(filterType===f?C.purple:C.cards,{padding:'7px 13px',borderRadius:20,whiteSpace:'nowrap',fontSize:12})}>{lb}</button>
             ))}
           </div>
@@ -820,7 +821,7 @@ function SpendSmart({user}) {
               <div key={t.id} style={sc({display:'flex',justifyContent:'space-between',alignItems:'center',padding:11})}>
                 <div style={{flex:1}}><div style={{fontSize:13,fontWeight:600}}>{t.category}</div><div style={{fontSize:11,color:C.grey}}>{t.date}{t.note?` • ${t.note}`:''}</div></div>
                 <div style={{display:'flex',alignItems:'center',gap:6}}>
-                  <div style={{fontWeight:'bold',fontSize:13,color:t.type==='income'?C.green:C.red}}>{t.type==='income'?'+':'-'}{fmtC(t.amount)}</div>
+                  <div style={{fontWeight:'bold',fontSize:13,color:t.type==='income'?C.green:t.type==='refund'?C.orange:C.red}}>{t.type==='income'?'+':t.type==='refund'?'↩':'-'}{fmtC(t.amount)}</div>
                   <button onClick={()=>openEdit(t)} style={{background:'none',border:'none',cursor:'pointer',fontSize:14}}>✏️</button>
                   <button onClick={()=>deleteTx(t.id)} style={{background:'none',border:'none',cursor:'pointer',fontSize:14}}>🗑️</button>
                 </div>
@@ -999,8 +1000,9 @@ function SpendSmart({user}) {
               <button onClick={closeModal} style={{background:'none',border:'none',color:C.white,fontSize:22,cursor:'pointer'}}>✕</button>
             </div>
             <div style={{display:'flex',gap:10,marginBottom:14}}>
-              <button onClick={()=>{setTxType('income');setSelCat('');}} style={sb(txType==='income'?C.green:C.cards,{flex:1,padding:11})}>📈 Income</button>
-              <button onClick={()=>{setTxType('expense');setSelCat('');}} style={sb(txType==='expense'?C.red:C.cards,{flex:1,padding:11})}>📉 Expense</button>
+              <button onClick={()=>{setTxType('income');setSelCat('');}} style={sb(txType==='income'?C.green:C.cards,{flex:1,padding:11,fontSize:12})}>📈 Income</button>
+              <button onClick={()=>{setTxType('expense');setSelCat('');}} style={sb(txType==='expense'?C.red:C.cards,{flex:1,padding:11,fontSize:12})}>📉 Expense</button>
+              <button onClick={()=>{setTxType('refund');setSelCat('');}} style={sb(txType==='refund'?C.orange:C.cards,{flex:1,padding:11,fontSize:12})}>🔄 Refund</button>
             </div>
             <div style={{marginBottom:13}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:5}}>
