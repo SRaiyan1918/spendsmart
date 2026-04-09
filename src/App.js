@@ -50,7 +50,7 @@ const CURRENCIES = [
 const getCurrSymbol = (code) => CURRENCIES.find(c=>c.code===code)?.symbol || '₹';
 
 // ⚠️ YAHAN APNI API KEY PASTE KARO (exchangerate-api.com se free mein milegi)
-const EXCHANGE_API_KEY = 'YOUR_API_KEY_HERE';
+const EXCHANGE_API_KEY = '932ac721e9d244b340738d9e';
 
 const fetchRates = async () => {
   try {
@@ -365,6 +365,8 @@ function SpendSmart({user}) {
   const [filterPeriod,setFilterPeriod]=useState('all');
   const [searchText,setSearchText]=useState('');
   const [filterMonth,setFilterMonth]=useState(new Date().toISOString().slice(0,7));
+  const [dashboardMonth,setDashboardMonth]=useState(new Date().toISOString().slice(0,7));
+  const [showMonthPicker,setShowMonthPicker]=useState(false);
   const [filterYear,setFilterYear]=useState(new Date().getFullYear().toString());
   const [graphPeriod,setGraphPeriod]=useState('monthly');
   // Savings states
@@ -600,9 +602,9 @@ function SpendSmart({user}) {
     setNewCat('');
   };
 
-  const totalIncome=transactions.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0);
   const totalRefund=transactions.filter(t=>t.type==='refund').reduce((s,t)=>s+t.amount,0);
-  const totalExpense=transactions.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0)-totalRefund;
+  const totalIncome = transactions.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0); // ✅ refund mat jodo
+  const totalExpense = transactions.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0) - totalRefund; // ✅ sirf expense se minus karo
   const balance=totalIncome-totalExpense;
   const curMonth=new Date().toISOString().slice(0,7);
   const monthlySpend=transactions.filter(t=>t.type==='expense'&&t.date?.startsWith(curMonth)).reduce((s,t)=>s+t.amount,0)-transactions.filter(t=>t.type==='refund'&&t.date?.startsWith(curMonth)).reduce((s,t)=>s+t.amount,0);
@@ -720,9 +722,28 @@ function SpendSmart({user}) {
             <div style={{fontSize:40,fontWeight:'bold',color:balance>=0?C.green:C.red}}>{fmtC(balance)}</div>
           </div>
           <div style={{display:'flex',gap:10,marginBottom:12}}>
-            <div style={sc({flex:1,marginBottom:0,borderLeft:`4px solid ${C.green}`})}><div style={{fontSize:11,color:C.grey,marginBottom:3}}>Income</div><div style={{fontSize:17,fontWeight:'bold',color:C.green}}>+{fmtC(totalIncome)}</div></div>
-            <div style={sc({flex:1,marginBottom:0,borderLeft:`4px solid ${C.red}`})}><div style={{fontSize:11,color:C.grey,marginBottom:3}}>Expense</div><div style={{fontSize:17,fontWeight:'bold',color:C.red}}>-{fmtC(totalExpense)}</div></div>
+            {(()=>{
+              const mIncome=transactions.filter(t=>t.type==='income'&&t.date?.startsWith(dashboardMonth)).reduce((s,t)=>s+t.amount,0);
+              const mRefund=transactions.filter(t=>t.type==='refund'&&t.date?.startsWith(dashboardMonth)).reduce((s,t)=>s+t.amount,0);
+              const mExpense=transactions.filter(t=>t.type==='expense'&&t.date?.startsWith(dashboardMonth)).reduce((s,t)=>s+t.amount,0);
+              const monthLabel=new Date(dashboardMonth+'-01').toLocaleString('default',{month:'short',year:'numeric'});
+              return(<>
+                <div onClick={()=>setShowMonthPicker(p=>!p)} style={sc({flex:1,marginBottom:0,borderLeft:`4px solid ${C.green}`,cursor:'pointer'})}>
+                  <div style={{fontSize:10,color:C.grey,marginBottom:2}}>📅 {monthLabel} Income</div>
+                  <div style={{fontSize:16,fontWeight:'bold',color:C.green}}>+{fmtC(mIncome+mRefund)}</div>
+                </div>
+                <div onClick={()=>setShowMonthPicker(p=>!p)} style={sc({flex:1,marginBottom:0,borderLeft:`4px solid ${C.red}`,cursor:'pointer'})}>
+                  <div style={{fontSize:10,color:C.grey,marginBottom:2}}>📅 {monthLabel} Expense</div>
+                  <div style={{fontSize:16,fontWeight:'bold',color:C.red}}>-{fmtC(mExpense-mRefund)}</div>
+                </div>
+              </>);
+            })()}
           </div>
+          {showMonthPicker&&(
+            <div style={{marginBottom:12}}>
+              <input type="month" value={dashboardMonth} onChange={e=>{setDashboardMonth(e.target.value);setShowMonthPicker(false);}} style={si({colorScheme:'dark'})}/>
+            </div>
+          )}
 
           <div style={{fontSize:15,fontWeight:600,marginBottom:10}}>Recent Transactions</div>
           {transactions.length===0
