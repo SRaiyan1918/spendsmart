@@ -544,18 +544,46 @@ function SpendSmart({user}) {
   // Udhar functions
   const saveUdhar=async()=>{
     if(!udharName||!udharAmount){alert('Naam aur Amount zaroori hai!');return;}
-    await addDoc(collection(db,'users',uid,'udhar'),{
+    const amt=parseFloat(udharAmount);
+    const udharRef=await addDoc(collection(db,'users',uid,'udhar'),{
       type:udharType,
       name:udharName,
-      amount:parseFloat(udharAmount),
+      amount:amt,
       returned:0,
       dueDate:udharDue||'',
       note:udharNote||'',
       date:udharDate,
       status:'active',
       returns:[],
+      linkedToBalance:true, // ye naya entry hai, balance se linked hai
       createdAt:new Date().toISOString()
     });
+    // Balance update karo
+    if(udharType==='gave'){
+      // Maine diya = Expense (balance se paise gaye)
+      await addDoc(collection(db,'users',uid,'transactions'),{
+        type:'expense',
+        category:'🤝 Udhar Diya',
+        amount:amt,
+        date:udharDate,
+        note:`Udhar diya: ${udharName}${udharNote?' — '+udharNote:''}`,
+        udharId:udharRef.id,
+        isUdharTx:true,
+        createdAt:new Date().toISOString()
+      });
+    } else {
+      // Mujhe mila = Income (kisi ne paise diye mujhe)
+      await addDoc(collection(db,'users',uid,'transactions'),{
+        type:'income',
+        category:'🤝 Udhar Liya',
+        amount:amt,
+        date:udharDate,
+        note:`Udhar liya: ${udharName}${udharNote?' — '+udharNote:''}`,
+        udharId:udharRef.id,
+        isUdharTx:true,
+        createdAt:new Date().toISOString()
+      });
+    }
     setUdharName('');setUdharAmount('');setUdharDue('');setUdharNote('');setUdharType('gave');
     setShowUdharModal(false);
   };
@@ -571,12 +599,39 @@ function SpendSmart({user}) {
     const newReturned=(selectedUdhar.returned||0)+retAmt;
     const newReturns=[...(selectedUdhar.returns||[]),{amount:retAmt,date:new Date().toISOString().split('T')[0]}];
     const isComplete=newReturned>=original;
+    const today=new Date().toISOString().split('T')[0];
     await updateDoc(doc(db,'users',uid,'udhar',selectedUdhar.id),{
       returned:newReturned,
       returns:newReturns,
       status:isComplete?'completed':'active',
-      completedAt:isComplete?new Date().toISOString().split('T')[0]:null
+      completedAt:isComplete?today:null
     });
+    // Balance update — wapasi ka transaction add karo
+    if(selectedUdhar.type==='gave'){
+      // Maine diya tha, ab wapas mila = Income
+      await addDoc(collection(db,'users',uid,'transactions'),{
+        type:'income',
+        category:'🤝 Udhar Wapas',
+        amount:retAmt,
+        date:today,
+        note:`Udhar wapas mila: ${selectedUdhar.name}`,
+        udharId:selectedUdhar.id,
+        isUdharTx:true,
+        createdAt:new Date().toISOString()
+      });
+    } else {
+      // Maine liya tha, ab wapas diya = Expense
+      await addDoc(collection(db,'users',uid,'transactions'),{
+        type:'expense',
+        category:'🤝 Udhar Chukaya',
+        amount:retAmt,
+        date:today,
+        note:`Udhar chukaya: ${selectedUdhar.name}`,
+        udharId:selectedUdhar.id,
+        isUdharTx:true,
+        createdAt:new Date().toISOString()
+      });
+    }
     setReturnAmount('');setShowReturnModal(false);setSelectedUdhar(null);
   };
 
@@ -919,10 +974,10 @@ function SpendSmart({user}) {
             <div style={sc({flex:1,marginBottom:0,borderLeft:`4px solid ${C.orange}`,padding:12})}>
               <div style={{fontSize:10,color:C.grey,marginBottom:3}}>💸 Maine Diya</div>
               <div style={{fontSize:16,fontWeight:'bold',color:C.orange}}>{fmtC(udharList.filter(u=>u.type==='gave'&&u.status==='active').reduce((s,u)=>s+(u.amount-(u.returned||0)),0))}</div>
-              <div style={{fontSize:10,color:C.grey}}>Pending wapas</div>
+              <div style={{fontSize:10,color:C.grey}}>Wapas milna baaki</div>
             </div>
             <div style={sc({flex:1,marginBottom:0,borderLeft:`4px solid ${C.purple}`,padding:12})}>
-              <div style={{fontSize:10,color:C.grey,marginBottom:3}}>💰 Mujhe Milega</div>
+              <div style={{fontSize:10,color:C.grey,marginBottom:3}}>💰 Mujhe Dena Hai</div>
               <div style={{fontSize:16,fontWeight:'bold',color:C.purple}}>{fmtC(udharList.filter(u=>u.type==='took'&&u.status==='active').reduce((s,u)=>s+(u.amount-(u.returned||0)),0))}</div>
               <div style={{fontSize:10,color:C.grey}}>Dena baaki</div>
             </div>
@@ -960,7 +1015,7 @@ function SpendSmart({user}) {
                         <span style={{fontSize:11,fontWeight:'bold',color:u.type==='gave'?C.orange:C.purple}}>{fmtC(remaining)} baaki</span>
                       </div>
                       <button onClick={()=>{setSelectedUdhar(u);setReturnAmount('');setShowReturnModal(true);}} style={sb(u.type==='gave'?C.orange:C.purple,{padding:'5px 12px',fontSize:11,borderRadius:16})}>
-                        {u.type==='gave'?'Wapas Mila?':'Maine Diya?'}
+                        {u.type==='gave'?'Wapas Mila?':'Maine Chukaya?'}
                       </button>
                     </div>
                     {u.note&&<div style={{fontSize:11,color:C.grey,marginTop:4}}>📝 {u.note}</div>}
@@ -1080,7 +1135,7 @@ function SpendSmart({user}) {
       {showReturnModal&&selectedUdhar&&(
         <div style={{position:'fixed',inset:0,backgroundColor:'rgba(0,0,0,0.88)',zIndex:100,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
           <div style={sc({width:'100%',maxWidth:340,marginBottom:0,padding:20})}>
-            <div style={{fontSize:17,fontWeight:'bold',marginBottom:4}}>{selectedUdhar.type==='gave'?'💸 Wapas Mila?':'💰 Maine Diya?'}</div>
+            <div style={{fontSize:17,fontWeight:'bold',marginBottom:4}}>{selectedUdhar.type==='gave'?'💸 Wapas Mila?':'💰 Maine Chukaya?'}</div>
             <div style={{fontSize:12,color:C.grey,marginBottom:4}}>{selectedUdhar.name}</div>
             <div style={{fontSize:12,color:C.orange,marginBottom:16}}>Baaki: {fmtC(selectedUdhar.amount-(selectedUdhar.returned||0))}</div>
             <div style={{marginBottom:16}}>
