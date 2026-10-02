@@ -26,8 +26,11 @@ if (require.main === module) {
   const entries = assets.map(asset => {
     const bytes = fs.readFileSync(path.join(build, asset));
     hash.update(asset).update(bytes);
-    return { url: asset, integrity: 'sha256-' + createHash('sha256').update(bytes).digest('base64') };
+    // Hosts may inject comments into HTML depending on the browser user agent.
+    // Keep integrity checks on all executable bundles and other static assets.
+    return asset === 'index.html' ? { url: asset } : { url: asset, integrity: 'sha256-' + createHash('sha256').update(bytes).digest('base64') };
   });
+  hash.update(JSON.stringify(entries));
   const version = hash.digest('hex').slice(0, 16);
   fs.writeFileSync(path.join(build, 'sw-budget.js'), renderWorker(source, entries, version));
   console.log(`Offline PWA: ${assets.length} files precached; release ${version}`);
