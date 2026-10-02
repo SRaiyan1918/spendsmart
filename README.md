@@ -1,3 +1,7 @@
+# SpendSmart offline PWA
+
+Offline operation is enabled after the first online installation and login, with the existing style and layout preserved. See [offline usage, deployment and verification instructions](docs/OFFLINE-PWA.md).
+
 # Getting Started with Create React App
 
 This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).

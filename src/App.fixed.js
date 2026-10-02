@@ -15,7 +15,7 @@ function Splash({ done }) {
   return (
     <div style={{ position: 'fixed', inset: 0, background: C.bg, zIndex: 9999 }} onClick={done}>
       <video
-        src="/splash.mp4"
+        src={`${process.env.PUBLIC_URL || ''}/splash.mp4`}
         autoPlay
         muted={muted}
         playsInline

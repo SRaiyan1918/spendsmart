@@ -27,3 +27,5 @@ jobs:
         run: CI=true npm test -- --watchAll=false --runInBand
       - name: Production build
         run: npm run build
+      - name: Offline service worker tests
+        run: npm run test:offline-worker

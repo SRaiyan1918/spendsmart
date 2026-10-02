@@ -1,13 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { signOut } from 'firebase/auth';
 import {
-  addDoc, collection, deleteDoc, doc, getDocs, onSnapshot, query,
-  runTransaction, setDoc, updateDoc, where, writeBatch,
+  collection, doc, onSnapshot,
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
+import { addLocal as addDoc, deleteLocal as deleteDoc, setLocal as setDoc, updateLocal as updateDoc, writeLocal } from './localWrites';
+import { applyFinancialCommand, projectFinancialCommands } from './financialCommands';
+import { enqueueCommand, readCommands, cancelTargetCommands } from './financialQueue';
+import useFinancialQueue from './useFinancialQueue';
+import useWriteJournal from './useWriteJournal';
+import { hasRejectedWrite } from './writeJournal';
 import {
   buildGraphData, calculatePeriodTotals, calculateTotals, fromBaseAmount,
-  getGoalAllocationAmount, isRecurringDue, normalizeTransaction,
+  isRecurringDue, normalizeTransaction,
   recurringOccurrenceKey, toBaseAmount, validatePositiveAmount,
 } from './financeLogic';
 import { CURRENCIES, fetchRates, symbolOf } from './currency';
@@ -38,9 +43,9 @@ export default function SpendSmart({ user }) {
   const uid = user.uid;
   const [screen, setScreen] = useState('home');
   const [loaded, setLoaded] = useState(false);
-  const [transactions, setTransactions] = useState([]);
-  const [goals, setGoals] = useState([]);
-  const [loans, setLoans] = useState([]);
+  const [storedTransactions, setTransactions] = useState([]);
+  const [storedGoals, setGoals] = useState([]);
+  const [storedLoans, setLoans] = useState([]);
   const [recurring, setRecurring] = useState([]);
   const [settings, setSettings] = useState({ name: '', monthlyBudget: 10000, currency: 'INR', incomeCategories: DEF_IN, expenseCategories: DEF_EX });
   const [rates, setRates] = useState(null);
@@ -90,6 +95,13 @@ export default function SpendSmart({ user }) {
   const [historyMonth, setHistoryMonth] = useState(monthNow());
   const [search, setSearch] = useState('');
   const [graphPeriod, setGraphPeriod] = useState('monthly');
+
+  const commands = useFinancialQueue(uid, storedTransactions);
+  useWriteJournal(uid);
+  const projected = useMemo(() => projectFinancialCommands(storedGoals, storedLoans, storedTransactions, commands), [storedGoals, storedLoans, storedTransactions, commands]);
+  const goals = projected.goals;
+  const loans = projected.loans;
+  const transactions = useMemo(() => [...projected.transactions].sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.createdAt || '').localeCompare(a.createdAt || '')), [projected]);
 
   const currency = settings.currency || 'INR';
   const toBase = value => toBaseAmount(value, currency, rates);
@@ -142,16 +154,14 @@ export default function SpendSmart({ user }) {
       recurringBusy.current.add(occurrence);
       try {
         const id = `recurring_${occurrence.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
-        await setDoc(doc(db, 'users', uid, 'transactions', id), {
+        if (hasRejectedWrite(uid, `users/${uid}/transactions/${id}`)) return;
+        await writeLocal([{ ref: doc(db, 'users', uid, 'transactions', id), data: {
           type: item.type, category: item.category, amount: safeNum(item.amount), date: current,
           note: item.note || '🔄 Recurring', recurringId: item.id, occurrence,
           createdAt: new Date().toISOString(),
-        });
-        await updateDoc(doc(db, 'users', uid, 'recurring', item.id), { lastAdded: current });
+        } }, { ref: doc(db, 'users', uid, 'recurring', item.id), type: 'update', data: { lastAdded: current } }]);
       } catch (error) {
         console.error('Recurring transaction failed', error);
-      } finally {
-        recurringBusy.current.delete(occurrence);
       }
     });
   }, [recurring, uid]);
@@ -223,25 +233,9 @@ export default function SpendSmart({ user }) {
   const allocateGoal = async () => {
     if (!goalPick) return alert('Goal choose karo.');
     const requested = baseAmountOrAlert(goalAmount); if (requested == null) return;
-    const goalRef = doc(db, 'users', uid, 'savings', goalPick);
-    const txRef = doc(collection(db, 'users', uid, 'transactions'));
-    let actual = 0;
     try {
-      await runTransaction(db, async transaction => {
-        const snap = await transaction.get(goalRef);
-        if (!snap.exists()) throw new Error('Goal not found');
-        const goal = snap.data();
-        actual = getGoalAllocationAmount(requested, goal.targetAmount, goal.savedAmount || 0);
-        if (actual <= 0) throw new Error('Goal already complete');
-        const savedAmount = safeNum(goal.savedAmount) + actual;
-        const complete = savedAmount >= safeNum(goal.targetAmount);
-        transaction.update(goalRef, { savedAmount, archived: complete, ...(complete ? { completedAt: today() } : {}) });
-        transaction.set(txRef, {
-          type: 'transfer', direction: 'out', transferKind: 'savings', isSavingsAllocation: true,
-          goalId: goalPick, category: `🏦 ${goal.emoji || '🎯'} ${goal.title}`, amount: actual,
-          date: today(), note: 'Savings Goal Allocation', createdAt: new Date().toISOString(),
-        });
-      });
+      const { actual } = applyFinancialCommand({ type: 'goal', targetId: goalPick, amount: requested, date: today() }, goals.find(goal => goal.id === goalPick));
+      enqueueCommand(uid, { type: 'goal', targetId: goalPick, amount: actual });
       if (actual < requested) alert(`Goal me sirf remaining ${fmt(actual)} allocate hua.`);
       setGoalPrompt(false); setGoalPick(''); setGoalAmount('');
     } catch (error) {
@@ -251,63 +245,61 @@ export default function SpendSmart({ user }) {
 
   const deleteGoal = async goal => {
     if (!window.confirm(`Goal “${goal.title}” delete karna hai? Linked allocations bhi remove honge.`)) return;
-    const linked = await getDocs(query(collection(db, 'users', uid, 'transactions'), where('goalId', '==', goal.id)));
+    const linked = transactions.filter(tx => tx.goalId === goal.id);
     const legacy = transactions.filter(tx => tx.transferKind === 'savings' && !tx.goalId && tx.note === '💰 Savings Goal Allocation' && String(tx.category || '').endsWith(goal.title));
-    const batch = writeBatch(db);
-    linked.docs.forEach(item => batch.delete(item.ref));
-    legacy.forEach(tx => batch.delete(doc(db, 'users', uid, 'transactions', tx.id)));
-    batch.delete(doc(db, 'users', uid, 'savings', goal.id));
-    await batch.commit();
+    const pending = readCommands(uid).filter(item => item.type === 'goal' && item.targetId === goal.id);
+    const ids = new Set([...linked, ...legacy, ...pending].map(item => item.id));
+    await writeLocal([
+      ...[...ids].map(id => ({ ref: doc(db, 'users', uid, 'transactions', id), type: 'delete' })),
+      { ref: doc(db, 'users', uid, 'savings', goal.id), type: 'delete' },
+    ]);
+    cancelTargetCommands(uid, 'goal', goal.id);
   };
 
   const saveLoan = async () => {
     if (!loanName.trim()) return alert('Naam daalo.');
     const amount = baseAmountOrAlert(loanAmount); if (amount == null) return;
-    const loanRef = await addDoc(collection(db, 'users', uid, 'udhar'), {
+    const loanRef = doc(collection(db, 'users', uid, 'udhar'));
+    const transferRef = doc(collection(db, 'users', uid, 'transactions'));
+    await writeLocal([{ ref: loanRef, data: {
       type: loanType, name: loanName.trim(), amount, returned: 0, dueDate: loanDue || '',
       note: loanNote.trim(), date: loanDate || today(), status: 'active', returns: [],
       createdAt: new Date().toISOString(),
-    });
-    await addDoc(collection(db, 'users', uid, 'transactions'), {
+    } }, { ref: transferRef, data: {
       type: 'transfer', direction: loanType === 'gave' ? 'out' : 'in',
       transferKind: loanType === 'gave' ? 'loan_given' : 'loan_taken',
       category: loanType === 'gave' ? '🤝 Udhar Diya' : '🤝 Udhar Liya', amount,
       date: loanDate || today(), note: `${loanType === 'gave' ? 'Udhar diya' : 'Udhar liya'}: ${loanName.trim()}`,
       udharId: loanRef.id, createdAt: new Date().toISOString(),
-    });
+    } }]);
     setLoanName(''); setLoanAmount(''); setLoanDate(today()); setLoanDue(''); setLoanNote(''); setLoanType('gave'); setLoanModal(false);
   };
 
   const addLoanReturn = async () => {
     if (!selectedLoan) return;
     const amount = baseAmountOrAlert(returnAmount); if (amount == null) return;
-    const remaining = Math.max(0, safeNum(selectedLoan.amount) - safeNum(selectedLoan.returned));
+    const currentLoan = loans.find(item => item.id === selectedLoan.id);
+    if (!currentLoan) return alert('Udhar item ab available nahi hai.');
+    const remaining = Math.max(0, safeNum(currentLoan.amount) - safeNum(currentLoan.returned));
     if (amount > remaining) {
       return alert(selectedLoan.type === 'gave' ? 'Original remaining amount se zyada record nahi kar sakte. Riba se bacho.' : `Remaining sirf ${fmt(remaining)} hai.`);
     }
-    const returned = safeNum(selectedLoan.returned) + amount;
-    const complete = returned >= safeNum(selectedLoan.amount);
-    await updateDoc(doc(db, 'users', uid, 'udhar', selectedLoan.id), {
-      returned, status: complete ? 'completed' : 'active', completedAt: complete ? today() : null,
-      returns: [...(selectedLoan.returns || []), { amount, date: today() }],
-    });
-    await addDoc(collection(db, 'users', uid, 'transactions'), {
-      type: 'transfer', direction: selectedLoan.type === 'gave' ? 'in' : 'out',
-      transferKind: selectedLoan.type === 'gave' ? 'loan_returned' : 'loan_repaid',
-      category: selectedLoan.type === 'gave' ? '🤝 Udhar Wapas' : '🤝 Udhar Chukaya',
-      amount, date: today(), note: selectedLoan.type === 'gave' ? `Udhar wapas mila: ${selectedLoan.name}` : `Udhar chukaya: ${selectedLoan.name}`,
-      udharId: selectedLoan.id, createdAt: new Date().toISOString(),
-    });
+    try {
+      enqueueCommand(uid, { type: 'loan', targetId: selectedLoan.id, amount });
+    } catch (error) { return alert(`Return save nahi hua: ${error.message}`); }
     setSelectedLoan(null); setReturnAmount('');
   };
 
   const deleteLoan = async loan => {
     if (!window.confirm(`${loan.name} ka udhar delete karna hai? Linked transfers bhi remove honge.`)) return;
-    const linked = await getDocs(query(collection(db, 'users', uid, 'transactions'), where('udharId', '==', loan.id)));
-    const batch = writeBatch(db);
-    linked.docs.forEach(item => batch.delete(item.ref));
-    batch.delete(doc(db, 'users', uid, 'udhar', loan.id));
-    await batch.commit();
+    const linked = transactions.filter(tx => tx.udharId === loan.id);
+    const pending = readCommands(uid).filter(item => item.type === 'loan' && item.targetId === loan.id);
+    const ids = new Set([...linked, ...pending].map(item => item.id));
+    await writeLocal([
+      ...[...ids].map(id => ({ ref: doc(db, 'users', uid, 'transactions', id), type: 'delete' })),
+      { ref: doc(db, 'users', uid, 'udhar', loan.id), type: 'delete' },
+    ]);
+    cancelTargetCommands(uid, 'loan', loan.id);
   };
 
   const saveRecurring = async () => {

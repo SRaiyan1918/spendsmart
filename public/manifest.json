@@ -18,9 +18,10 @@
       "sizes": "512x512"
     }
   ],
-  "start_url": ".",
+  "start_url": "./",
+  "scope": "./",
   "display": "standalone",
   "theme_color": "#7C4DFF",
   "background_color": "#0A0A0A",
-  "description": "Track your daily expenses and manage monthly budget smartly. Free, offline, no login required."
+  "description": "Track expenses, income, savings and budget. Works offline after first online installation and login."
 }

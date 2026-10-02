@@ -11,20 +11,26 @@ const API_KEY = process.env.REACT_APP_EXCHANGE_RATE_API_KEY || '932ac721e9d244b3
 export async function fetchRates() {
   const cacheKey = 'spendsmart_rates_v2';
   const cacheTime = 'spendsmart_rates_time_v2';
+  let cached = null;
+  try {
+    const raw = localStorage.getItem(cacheKey);
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (parsed && parsed.INR === 1) cached = parsed;
+  } catch { /* A malformed cache must not prevent a fresh fetch. */ }
   try {
     const last = Number(localStorage.getItem(cacheTime) || 0);
     if (Date.now() - last < 24 * 60 * 60 * 1000) {
-      const cached = localStorage.getItem(cacheKey);
-      if (cached) return JSON.parse(cached);
+      if (cached) return cached;
     }
+    if (navigator.onLine === false) return cached;
     const response = await fetch(`https://v6.exchangerate-api.com/v6/${API_KEY}/latest/INR`);
-    if (!response.ok) return null;
+    if (!response.ok) return cached;
     const data = await response.json();
-    if (data.result !== 'success') return null;
+    if (data.result !== 'success' || data.conversion_rates?.INR !== 1) return cached;
     localStorage.setItem(cacheKey, JSON.stringify(data.conversion_rates));
     localStorage.setItem(cacheTime, String(Date.now()));
     return data.conversion_rates;
   } catch {
-    return null;
+    return cached;
   }
 }

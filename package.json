@@ -16,6 +16,8 @@
   "scripts": {
     "start": "react-scripts start",
     "build": "react-scripts build",
+    "postbuild": "node scripts/generate-offline-worker.cjs",
+    "test:offline-worker": "node --test scripts/offline-worker.test.cjs",
     "test": "react-scripts test",
     "eject": "react-scripts eject"
   },

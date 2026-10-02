@@ -32,6 +32,7 @@ export default function AuthScreen() {
 
   const submit = async () => {
     setMessage('');
+    if (!navigator.onLine) { setMessage('Login/sign up/password reset ke liye internet chahiye.'); return; }
     if (!email.trim() || (mode !== 'forgot' && !password) || (mode === 'signup' && !name.trim())) {
       setMessage('Required fields fill karo.');
       return;
@@ -63,6 +64,7 @@ export default function AuthScreen() {
   };
 
   const googleLogin = async () => {
+    if (!navigator.onLine) { setMessage('Google login ke liye internet chahiye.'); return; }
     setLoading(true);
     setMessage('');
     try {
